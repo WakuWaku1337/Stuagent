@@ -44,6 +44,8 @@ onMounted(async () => {
       <router-link to="/tasks" style="color: #2563eb">后台任务 →</router-link>
       &nbsp;&nbsp;
       <router-link to="/review" style="color: #2563eb">考试复盘 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/courseware" style="color: #2563eb">交互课件 →</router-link>
     </p>
   </main>
 </template>

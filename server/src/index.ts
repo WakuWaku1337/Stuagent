@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
@@ -10,6 +12,8 @@ import { chat, getModelInfo } from './pi.ts';
 import documents from './routes/documents.ts';
 import learning from './routes/learning.ts';
 import reviews from './routes/reviews.ts';
+import courseware from './routes/courseware.ts';
+import { checkInput, filterOutput, redactPII, StreamRedactor } from './security/guard.ts';
 import { searchKnowledge, type Citation } from './rag/service.ts';
 import { AGENTS, isAgentId, type AgentId } from './agents/roles.ts';
 import { routeMessage } from './agents/router.ts';
@@ -82,6 +86,7 @@ app.get('/api/model', async (c) => {
 app.route('/api/documents', documents);
 app.route('/api', learning);
 app.route('/api/reviews', reviews);
+app.route('/api/courseware', courseware);
 
 app.post('/api/knowledge/search', async (c) => {
   const body = await c.req.json<{ query?: string; topK?: number; subject?: string }>().catch(() => null);
@@ -105,13 +110,23 @@ app.post('/api/chat', async (c) => {
     .catch(() => null);
   const message = body?.message?.trim();
   if (!message) return c.json({ error: 'message 不能为空' }, 400);
+
+  const guard = checkInput(message);
+  if (guard.blocked) {
+    return c.json({ code: 'SECURITY_BLOCKED', message: guard.reason, matches: guard.matches }, 400);
+  }
+  const redacted = redactPII(message);
+  const safeMessage = redacted.text;
+  const securityInfo = { input_redactions: redacted.hits };
+
   const sessionId = body?.sessionId || 'default';
   const decision = isAgentId(body?.agent)
     ? { agent: body!.agent as AgentId, reason: '用户指定', source: 'explicit' as const }
-    : await routeMessage(message);
+    : await routeMessage(safeMessage);
 
   if (body?.stream) {
     return streamSSE(c, async (stream) => {
+      const redactor = new StreamRedactor();
       try {
         await stream.writeSSE({
           event: 'route',
@@ -122,10 +137,35 @@ app.post('/api/chat', async (c) => {
             reason: decision.reason,
           }),
         });
+        if (redacted.hits.length > 0) {
+          await stream.writeSSE({
+            event: 'security',
+            data: JSON.stringify({ type: 'security', ...securityInfo }),
+          });
+        }
         await chat(
           sessionId,
-          message,
+          safeMessage,
           (event) => {
+            if (event.type === 'delta' && event.text) {
+              const filtered = redactor.push(event.text);
+              if (filtered) {
+                void stream.writeSSE({
+                  event: 'delta',
+                  data: JSON.stringify({ ...event, text: filtered }),
+                });
+              }
+              return;
+            }
+            if (event.type === 'done') {
+              const tail = redactor.flush();
+              if (tail) {
+                void stream.writeSSE({
+                  event: 'delta',
+                  data: JSON.stringify({ type: 'delta', text: tail }),
+                });
+              }
+            }
             void stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
           },
           c.req.raw.signal,
@@ -142,27 +182,40 @@ app.post('/api/chat', async (c) => {
 
   try {
     const citations: Citation[] = [];
-    const text = await chat(
+    const raw = await chat(
       sessionId,
-      message,
+      safeMessage,
       (event) => {
         if (event.citations) citations.push(...event.citations);
       },
       c.req.raw.signal,
       decision.agent,
     );
+    const filtered = filterOutput(raw);
     return c.json({
       sessionId,
       agent: decision.agent,
       agent_name: AGENTS[decision.agent].name,
       route_reason: decision.reason,
-      reply: text,
+      reply: filtered.text,
       citations,
+      security: { ...securityInfo, output_redactions: filtered.hits },
     });
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }
 });
+
+const webDist = resolve(serverRoot, '..', 'web', 'dist');
+const spaIndex = resolve(webDist, 'index.html');
+if (existsSync(spaIndex)) {
+  app.use('/*', serveStatic({ root: webDist }));
+  app.get('*', (c) => {
+    if (c.req.path.startsWith('/api/')) return c.json({ error: 'Not Found' }, 404);
+    return c.html(readFileSync(spaIndex, 'utf8'));
+  });
+  console.log(`[edu-agent] serving built web from ${webDist}`);
+}
 
 const port = Number(process.env.PORT ?? 3000);
 

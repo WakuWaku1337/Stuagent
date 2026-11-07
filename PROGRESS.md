@@ -1,33 +1,42 @@
 # 智学 实施进度
 
-当前阶段：G 考试复盘 —— 已完成（S15、S16 验收通过）
-已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C）；S08–S12（D+E）；S13–S14（F）；S15–S16（G，2026-11-07 本次）
-下一步对话（编号+目标）：S17 课件与安全 —— edulab 交互课件、安全 SDK（防注入/脱敏）；验收：课件可看、安全策略生效
+当前阶段：H 进阶与收尾 —— 已完成（S17、S18 验收通过）
+已完成对话：S01–S18 全部完成（A–H，2026-11-07）
+下一步对话：无（设计文档 18 次对话已走完）；可选增强见"遗留问题与风险"
 
 关键文件/接口：
-- server/src/learning/exams.ts：整卷识别（文本/图片）、EXAM 表读写、复盘分析（逐题判分、错因归类、BKT 与错题联动、报告生成）、趋势对比
-- server/src/learning/vision.ts：多模态识别（图片 → JSON），模型 qwen3.8-flash 支持图片输入
-- server/src/routes/reviews.ts：POST /api/reviews/recognize（multipart：图片/PDF/DOCX/文本）、GET /api/reviews、GET /api/reviews/compare、GET /api/reviews/:id、POST /api/reviews/:id/analyze
-- server/src/store.ts：exam_papers / exam_questions / exam_reviews 表
-- server/src/learning/tools.ts：新增 exam_analyze / exam_compare 工具（Analyst）
-- web/src/views/ReviewView.vue：上传整卷（拍照/PDF/Word/文本）、考试记录、报告、逐题明细、ECharts 趋势图；路由 /review
+- server/src/security/guard.ts：输入注入拦截（7 类规则）、PII 脱敏（手机/身份证/银行卡/邮箱）、输出过滤（脱敏 + sk-/Bearer/AKID 密钥）、流式 StreamRedactor（24 字符尾缓存，跨分片不漏检）
+- server/src/courseware/service.ts：单文件交互课件生成（LLM 出 HTML + 校验；失败回退内置 canvas 模板），离线约束（禁止外链/CDN）
+- server/src/courseware/tool.ts：Pi 工具 courseware_generate（Tutor/Solver 可用）
+- server/src/routes/courseware.ts：/api/courseware（列表/生成/预览 HTML/删除），HTML 带 CSP 与 nosniff
+- server/src/index.ts：/api/chat 接入安全检查（400 SECURITY_BLOCKED）、输入/输出脱敏、SSE security 事件；后端托管 web/dist（SPA 回退，API 404 保持 JSON）
+- server/scripts/eval-rag.ts + server/testdata/eval-rag.json：RAG 评测集（8 题）与 Hit@K/MRR/延迟统计
+- server/scripts/regression.ts：全流程回归（16 项）
+- server/scripts/check-security.ts：安全单测（PII/密钥/注入/流式脱敏）
+- web/src/views/CoursewareView.vue：课件页（生成、列表、沙箱 iframe 预览）；路由 /courseware
 
 验收证据（2026-11-07 实测）：
-- S15 文本整卷：exam-1.md 识别 7 题、总分 50、得分 38，题型/知识点/学生答案/正确答案/老师批注错因全部结构化；exam-2.md 识别 6 题 48/50
-- S15 拍照整卷：Edge 生成试卷截图 exam-photo.png → 视觉模型识别 2 题、14/20，勾叉批注转为 error_reason
-- S16 复盘：exam-1 得分率 76%，失分知识点 2 个，新增错题 2 道，7 个知识点 BKT 更新（薄弱项 15%）；报告含总体/失分分布/错因/建议；exam-2 复盘 96%
-- S16 趋势：3 次考试 76% → 96% → 70%，weakest 知识点累计失分排序；浏览器复盘页显示考试列表、报告、逐题明细与趋势图（canvas）
-- Analyst 工具：对话"对比最近几次考试趋势"路由到 Analyst，输出趋势诊断（含"立体几何无数据"盲区提示）
+- S17 安全：注入消息返回 400 {code:SECURITY_BLOCKED, matches:[override-instructions, prompt-exfiltration]}；手机号输入触发 input_redactions phone×1，模型只收到 138****8000（复述实验）；单测输出：138****8000 / a***@example.com / 110101********1234 / 6222********0123，sk-/Bearer 均被掩码；流式三片拼出 138****8000
+- S17 课件：LLM 生成《勾股定理交互课件》（4123 字节，canvas+range，无外链），CSP 生效；浏览器打开 canvas 绘制 101,252 个非透明像素，拖动滑块画面变化；课件页 iframe（sandbox=allow-scripts）加载正常；生成失败时回退内置模板
+- S18 评测：8 题 RAG 回归 Hit@1=100%、Hit@3=100%、Recall@5=100%、MRR=1.000、P50 371ms / P95 1313ms
+- S18 托管：`:3000/` 与 `/chat` 返回 SPA（含 #app），`/api/not-exist` 返回 JSON 404
+- S18 全流程回归：16/16 PASS（health、model、agents、documents、memory、mastery、wrongbook、reviews、courseware、tasks、RAG、注入拦截、SPA、SPA 回退、API 404、非流式对话）
+
+启动方式：
+- npm run milvus:up；npm run build（前端构建后由后端 :3000 托管，也可用 npm run dev 开发）
+- 页面：/ /chat /documents /quiz /wrongbook /mastery /exam /tasks /review /courseware
+- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts
 
 关键决策与偏离（需评审知悉）：
-1. OCR 采用多模态大模型（qwen3.8-flash 视觉输入）直接识别整卷，未引入独立 OCR MCP；PDF 走文本解析（扫描版 PDF 需先转图片）。
-2. 判分以老师批改/卷面得分为准；错因优先采用卷面批注，缺失时由 LLM 在五类中归因。
-3. 竞赛/考试选择题与解答题的 is_correct 以 got_score < full_score 判定失分；部分得分（如 8/14）也计入错题本。
-4. 复盘报告与趋势结论由 LLM 基于统计事实生成，报告中的数字均来自数据；统计兜底模板在 LLM 失败时使用。
-5. 未实现设计 7.1 的 EXAM_REVIEW.loss_analysis 独立字段文本化（以 JSON 存入 loss_analysis 列）。
-6. setup-matt-pocock-skills 技能本会话不可用，未使用。
+1. 安全为自研轻量策略（规则 + 脱敏 + 流式过滤），未接入 SuperAgent 安全 SDK（设计与 §4.3 均标注其为 P2 可选）。
+2. 课件未移植 edulab 工程，采用"LLM 生成单文件 HTML + 校验 + 内置模板兜底"，满足离线可看与交互；3D 由 canvas 表现，非 Three.js。
+3. 文档上传内容未做 PII 脱敏（仅对话链路），文档切片进入向量库前未过滤敏感信息。
+4. 危险工具拦截未实现：当前工具集无 bash/edit 等系统级工具。
+5. 评测集为 8 题小样本、单一标注来源，指标用于回归而非学术评测。
+6. setup-matt-pocock-skills 配置已写入 AGENTS.md 与 docs/agents/*（GitHub 追踪器、默认标签、单上下文域文档）。
 
 遗留问题与风险：
-- 扫描版 PDF 未做逐页转图 OCR（可后续用 pdfjs 渲染 + 视觉模型）
-- 识别结果无人工校对界面（当前直接落库，可加"编辑题目"能力）
-- S17 需要 edulab/安全 SDK 的接入方案（课件可先做 HTML iframe 托管，安全做输入/输出策略）
+- GitHub 直连依赖 SteamTools TLS 代理 + 仓库级 CA；gh 尚未登录，triage 标签未创建；本地历史与远程初始提交不相关，尚未推送
+- 扫描版 PDF 未逐页 OCR；复盘识别无人工校对界面
+- 引用卡片会累积低相关项；后台任务单 Worker 串行且失败无重试
+- 跨角色对话上下文不共享（画像/记忆/掌握度共享）

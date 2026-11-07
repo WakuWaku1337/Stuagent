@@ -1,0 +1,10 @@
+[
+  { "query": "勾股定理的内容是什么？", "expect_source": "geometry.txt" },
+  { "query": "直角三角形的斜边怎么求？", "expect_source": "geometry.txt" },
+  { "query": "指数函数的单调性", "expect_source": "math-notes.md" },
+  { "query": "对数函数的运算性质有哪些？", "expect_source": "math-notes.md" },
+  { "query": "二分法求方程近似解的步骤", "expect_source": "math-notes.md" },
+  { "query": "气体摩尔体积在标准状况下是多少？", "expect_source": "chemistry.pdf" },
+  { "query": "物质的量浓度的计算公式", "expect_source": "chemistry.pdf" },
+  { "query": "幂函数的图像经过哪个定点？", "expect_source": "math-notes.md" }
+]

@@ -170,6 +170,16 @@ db.exec(`
     report TEXT,
     generated_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS courseware (
+    courseware_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    subject TEXT,
+    html TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];

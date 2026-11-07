@@ -12,7 +12,7 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
     id: 'tutor',
     name: 'Tutor 主讲',
     description: '启发式讲解、日常答疑、概念梳理（默认入口）',
-    tools: ['knowledge_search', 'memory_write', 'memory_recall', 'wrongbook_add'],
+    tools: ['knowledge_search', 'memory_write', 'memory_recall', 'wrongbook_add', 'courseware_generate'],
   },
   quizzer: {
     id: 'quizzer',
@@ -30,7 +30,7 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
     id: 'solver',
     name: 'Solver 解题',
     description: '复杂题分步推理、验算、拍照题讲解',
-    tools: ['knowledge_search'],
+    tools: ['knowledge_search', 'courseware_generate'],
   },
 };
 

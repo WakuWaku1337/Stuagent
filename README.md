@@ -57,5 +57,25 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/reviews/recognize | 整卷识别（拍照 PNG/JPG、PDF、DOCX、文本） |
 | GET | /api/reviews · /api/reviews/:id · /api/reviews/compare | 考试记录 / 详情 / 趋势对比 |
 | POST | /api/reviews/:id/analyze | 生成复盘报告（判分、错因、BKT、错题联动） |
+| GET/POST | /api/courseware | 交互课件列表 / 生成（单文件 HTML，离线可用） |
+| GET | /api/courseware/:id | 课件 HTML（CSP 沙箱） |
 
-页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘。
+页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件。
+
+安全：对话接口内置注入拦截、手机号/身份证/银行卡/邮箱脱敏、密钥过滤，流式输出同样生效。
+
+## 质量校验
+
+```bash
+cd server
+node --import jiti/register scripts/regression.ts   # 全流程回归（16 项）
+node --import jiti/register scripts/eval-rag.ts     # RAG 评测（Hit@K / MRR / 延迟）
+node --import jiti/register scripts/check-security.ts  # 安全策略单测
+```
+
+## 生产构建
+
+```bash
+npm run build        # 构建 web/dist
+npm run dev:server   # :3000 同时托管 API 与前端 SPA
+```

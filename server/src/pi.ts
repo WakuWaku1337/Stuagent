@@ -11,6 +11,7 @@ import {
 import { createKnowledgeTool } from './rag/tool.ts';
 import type { Citation } from './rag/service.ts';
 import { createLearningTools } from './learning/tools.ts';
+import { createCoursewareTool } from './courseware/tool.ts';
 import { profileContext } from './learning/memory.ts';
 import { AGENTS, type AgentId } from './agents/roles.ts';
 
@@ -103,6 +104,7 @@ async function getSession(sessionId: string, agentId: AgentId): Promise<AgentSes
     customTools: [
       createKnowledgeTool((citations) => citationSinks.get(key)?.(citations)),
       ...createLearningTools(),
+      createCoursewareTool(),
     ],
     sessionManager: SessionManager.inMemory(),
   });
