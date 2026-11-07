@@ -65,12 +65,14 @@ export async function recognizeFromText(text: string, sourceName?: string): Prom
   const result = await chatJson<RecognizedPaper>([
     { role: 'system', content: RECOGNIZE_INSTRUCTION },
     { role: 'user', content: `试卷内容：\n${text.slice(0, 12000)}` },
-  ]);
+  ], { scenario: 'review' });
   return normalizePaper(result, sourceName);
 }
 
 export async function recognizeFromImage(dataUrl: string, sourceName?: string): Promise<RecognizedPaper> {
-  const result = await chatVisionJson<RecognizedPaper>(dataUrl, RECOGNIZE_INSTRUCTION);
+  const result = await chatVisionJson<RecognizedPaper>(dataUrl, RECOGNIZE_INSTRUCTION, {
+    scenario: 'review',
+  });
   return normalizePaper(result, sourceName);
 }
 
@@ -229,7 +231,7 @@ async function classifyReasons(questions: ExamQuestionRow[]): Promise<Record<str
           )
           .join('\n'),
       },
-    ], 0.2);
+    ], { scenario: 'review' });
     const map: Record<string, string> = {};
     for (const item of result.items ?? []) map[String(item.question_no)] = item.reason;
     return map;
@@ -360,7 +362,7 @@ async function buildReport(
           '你是学习诊断分析师。基于给定数据写考试复盘报告，只输出 JSON：{"report":"Markdown 文本"}。报告必须包含：## 总体情况、## 失分分布（题型/知识点）、## 错因归类、## 行动建议（含下次目标分与变式题方向）。结论先行，数字必须来自数据，不得编造。',
       },
       { role: 'user', content: JSON.stringify(facts) },
-    ]).then((r) => r.report);
+    ], { scenario: 'review', subject: paper.subject ?? undefined }).then((r) => r.report);
   } catch {
     const weak = stats.byKnowledge.slice(0, 3);
     return [

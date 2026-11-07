@@ -47,7 +47,7 @@ export async function routeMessage(message: string): Promise<RouteDecision> {
           '你是学习助手路由器。根据学生输入判断应由哪个角色处理，只输出 JSON：{"agent":"tutor|quizzer|analyst|solver","reason":"一句话理由"}。tutor=讲解答疑，quizzer=出题练习，analyst=诊断分析，solver=复杂解题。',
       },
       { role: 'user', content: message },
-    ], 0);
+    ], { scenario: 'routing', temperature: 0 });
     const agent = AGENT_IDS.includes(result.agent as AgentId) ? (result.agent as AgentId) : 'tutor';
     return { agent, reason: result.reason ?? 'LLM 分类', source: 'llm' };
   } catch {

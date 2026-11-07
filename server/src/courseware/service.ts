@@ -32,7 +32,7 @@ export async function generateCourseware(input: {
         { role: 'system', content: PROMPT },
         { role: 'user', content: `主题：${input.topic}${input.subject ? `（${input.subject}）` : ''}` },
       ],
-      0.4,
+      { scenario: 'courseware', subject: input.subject },
     );
     const candidate = stripFence(result.html ?? '');
     if (isValidHtml(candidate)) {

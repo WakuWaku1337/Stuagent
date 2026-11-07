@@ -6,17 +6,18 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
 import { cancelTask, enqueue, getTask, listTasks, startQueue, taskEvents, type TaskType } from './tasks/queue.ts';
-import { chat, getModelInfo } from './pi.ts';
+import { getModelInfo } from './pi.ts';
 import documents from './routes/documents.ts';
 import learning from './routes/learning.ts';
 import reviews from './routes/reviews.ts';
 import courseware from './routes/courseware.ts';
-import { checkInput, filterOutput, redactPII, StreamRedactor } from './security/guard.ts';
-import { searchKnowledge, type Citation } from './rag/service.ts';
-import { AGENTS, isAgentId, type AgentId } from './agents/roles.ts';
-import { routeMessage } from './agents/router.ts';
+import settingsRoutes from './routes/settings.ts';
+import usageRoutes from './routes/usage.ts';
+import conversations from './routes/conversations.ts';
+import { handleChat, type ChatBody } from './chat/handler.ts';
+import { searchKnowledge } from './rag/service.ts';
+import { AGENTS } from './agents/roles.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const envPath = resolve(serverRoot, '.env');
@@ -87,6 +88,9 @@ app.route('/api/documents', documents);
 app.route('/api', learning);
 app.route('/api/reviews', reviews);
 app.route('/api/courseware', courseware);
+app.route('/api/settings', settingsRoutes);
+app.route('/api/usage', usageRoutes);
+app.route('/api/conversations', conversations);
 
 app.post('/api/knowledge/search', async (c) => {
   const body = await c.req.json<{ query?: string; topK?: number; subject?: string }>().catch(() => null);
@@ -105,105 +109,9 @@ app.get('/api/agents', (c) =>
 );
 
 app.post('/api/chat', async (c) => {
-  const body = await c.req
-    .json<{ message?: string; sessionId?: string; stream?: boolean; agent?: string }>()
-    .catch(() => null);
-  const message = body?.message?.trim();
-  if (!message) return c.json({ error: 'message 不能为空' }, 400);
-
-  const guard = checkInput(message);
-  if (guard.blocked) {
-    return c.json({ code: 'SECURITY_BLOCKED', message: guard.reason, matches: guard.matches }, 400);
-  }
-  const redacted = redactPII(message);
-  const safeMessage = redacted.text;
-  const securityInfo = { input_redactions: redacted.hits };
-
-  const sessionId = body?.sessionId || 'default';
-  const decision = isAgentId(body?.agent)
-    ? { agent: body!.agent as AgentId, reason: '用户指定', source: 'explicit' as const }
-    : await routeMessage(safeMessage);
-
-  if (body?.stream) {
-    return streamSSE(c, async (stream) => {
-      const redactor = new StreamRedactor();
-      try {
-        await stream.writeSSE({
-          event: 'route',
-          data: JSON.stringify({
-            type: 'route',
-            agent: decision.agent,
-            agent_name: AGENTS[decision.agent].name,
-            reason: decision.reason,
-          }),
-        });
-        if (redacted.hits.length > 0) {
-          await stream.writeSSE({
-            event: 'security',
-            data: JSON.stringify({ type: 'security', ...securityInfo }),
-          });
-        }
-        await chat(
-          sessionId,
-          safeMessage,
-          (event) => {
-            if (event.type === 'delta' && event.text) {
-              const filtered = redactor.push(event.text);
-              if (filtered) {
-                void stream.writeSSE({
-                  event: 'delta',
-                  data: JSON.stringify({ ...event, text: filtered }),
-                });
-              }
-              return;
-            }
-            if (event.type === 'done') {
-              const tail = redactor.flush();
-              if (tail) {
-                void stream.writeSSE({
-                  event: 'delta',
-                  data: JSON.stringify({ type: 'delta', text: tail }),
-                });
-              }
-            }
-            void stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-          },
-          c.req.raw.signal,
-          decision.agent,
-        );
-      } catch (e) {
-        await stream.writeSSE({
-          event: 'error',
-          data: JSON.stringify({ type: 'error', message: e instanceof Error ? e.message : String(e) }),
-        });
-      }
-    });
-  }
-
-  try {
-    const citations: Citation[] = [];
-    const raw = await chat(
-      sessionId,
-      safeMessage,
-      (event) => {
-        if (event.citations) citations.push(...event.citations);
-      },
-      c.req.raw.signal,
-      decision.agent,
-    );
-    const filtered = filterOutput(raw);
-    return c.json({
-      sessionId,
-      agent: decision.agent,
-      agent_name: AGENTS[decision.agent].name,
-      route_reason: decision.reason,
-      reply: filtered.text,
-      citations,
-      security: { ...securityInfo, output_redactions: filtered.hits },
-    });
-  } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
-  }
+  const body = await c.req.json<ChatBody>().catch(() => null);
+  if (!body) return c.json({ error: '请求体必须是 JSON' }, 400);
+  return handleChat(c, body);
 });
 
 const webDist = resolve(serverRoot, '..', 'web', 'dist');

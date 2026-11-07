@@ -33,7 +33,7 @@ export async function generateQuiz(input: {
       role: 'user',
       content: `请围绕知识点「${input.knowledgePoint}」出 ${count} 道${difficulty}难度的单选题${input.subject ? `，学科：${input.subject}` : ''}。`,
     },
-  ]);
+  ], { scenario: 'quiz', subject: input.subject });
   const items = result.questions ?? [];
   if (items.length === 0) throw new Error('模型未返回题目');
   return saveQuestions(items, {
@@ -59,7 +59,7 @@ export async function extractBankFromDocument(chunks: { text: string }[]): Promi
         '你是题库整理助手。从给定资料中提取选择题，只输出 JSON：{"questions":[{"stem":"题干","options":{"A":"...","B":"...","C":"...","D":"..."},"answer":"A","explanation":"解析","knowledge_point":"知识点"}]}。资料中找不到选择题就基于内容出单选题，不要编造无关题目。',
     },
     { role: 'user', content: `资料内容：\n${content}` },
-  ]);
+  ], { scenario: 'quiz' });
   const items = result.questions ?? [];
   if (items.length === 0) throw new Error('未能从资料中提取到题目');
   saveQuestions(items, {

@@ -180,6 +180,81 @@ db.exec(`
     source TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS model_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    reasoning TEXT NOT NULL DEFAULT 'medium',
+    temperature REAL NOT NULL DEFAULT 0.5,
+    top_p REAL NOT NULL DEFAULT 0.95,
+    max_tokens INTEGER NOT NULL DEFAULT 4096,
+    context_length INTEGER NOT NULL DEFAULT 131072,
+    scenario_params TEXT NOT NULL DEFAULT '{}',
+    monthly_budget REAL NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS provider_keys (
+    key_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    label TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    hint TEXT NOT NULL,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    cooldown_until INTEGER,
+    last_error TEXT,
+    last_used_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_provider_keys ON provider_keys(provider);
+
+  CREATE TABLE IF NOT EXISTS usage_records (
+    usage_id TEXT PRIMARY KEY,
+    learner_id TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    scenario TEXT NOT NULL,
+    subject TEXT,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,
+    success INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    key_id TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
+  CREATE INDEX IF NOT EXISTS idx_usage_scenario ON usage_records(scenario, created_at);
+
+  CREATE TABLE IF NOT EXISTS conversations (
+    conversation_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    title_auto INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_conversations_learner ON conversations(learner_id, updated_at);
+
+  CREATE TABLE IF NOT EXISTS messages (
+    message_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    msg_type TEXT NOT NULL DEFAULT 'text',
+    content TEXT NOT NULL,
+    attachments TEXT,
+    agent TEXT,
+    citations TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];

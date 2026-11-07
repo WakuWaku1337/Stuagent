@@ -40,7 +40,11 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 |---|---|---|
 | GET | /health | 健康检查 |
 | GET | /api/model | 当前模型与配置状态 |
-| POST | /api/chat | 对话（`stream:true` 走 SSE：delta/citations/done/error） |
+| POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/route/delta/citations/done/error）；无 conversationId 时自动建会话 |
+| GET/POST | /api/conversations | 历史会话列表（`q` 搜索、`limit/offset` 分页）/ 新建会话 |
+| GET/PUT/DELETE | /api/conversations/:id | 会话详情与消息（`limit/before` 分页）/ 重命名与置顶 / 删除 |
+| GET | /api/conversations/:id/messages | 消息分页（`limit`、`before` 游标） |
+| POST | /api/conversations/:id/messages | 在指定会话继续对话（SSE，原上下文续聊） |
 | POST/GET | /api/documents | 上传（multipart，支持多文件）/ 文档列表 |
 | GET/DELETE | /api/documents/:id | 文档详情与切片 / 删除（含向量） |
 | POST | /api/documents/:id/reparse / index | 重新解析 / 重新灌库 |
@@ -59,8 +63,17 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/reviews/:id/analyze | 生成复盘报告（判分、错因、BKT、错题联动） |
 | GET/POST | /api/courseware | 交互课件列表 / 生成（单文件 HTML，离线可用） |
 | GET | /api/courseware/:id | 课件 HTML（CSP 沙箱） |
+| GET | /api/settings/providers | Provider 与模型目录 |
+| GET/PUT | /api/settings/model | 当前模型 / 切换 Provider 与模型 |
+| GET/PUT | /api/settings/apikey · /api/settings/keys | 密钥列表（掩码）/ 保存、更新、删除 |
+| PUT | /api/settings/reasoning · /api/settings/generation | 思考强度 / 生成参数与预算 |
+| POST | /api/settings/test | 测试模型连接与密钥有效性 |
+| GET | /api/usage/summary · /api/usage/daily · /api/usage/cost | 用量汇总 / 每日明细 / 成本 |
+| GET | /api/usage/export?format=csv|json | 导出用量明细 |
 
-页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件。
+页面：`/` 首页、`/chat` 对话（历史会话侧栏、重开续聊、引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件、`/settings` 模型设置、`/usage` 用量统计。
+
+技术栈前端：Vue3 + Vite + Element Plus + ECharts（按需加载），统一水墨蓝主题与移动端抽屉导航。
 
 安全：对话接口内置注入拦截、手机号/身份证/银行卡/邮箱脱敏、密钥过滤，流式输出同样生效。
 
@@ -68,7 +81,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 
 ```bash
 cd server
-node --import jiti/register scripts/regression.ts   # 全流程回归（16 项）
+node --import jiti/register scripts/regression.ts   # 全流程回归（28 项）
 node --import jiti/register scripts/eval-rag.ts     # RAG 评测（Hit@K / MRR / 延迟）
 node --import jiti/register scripts/check-security.ts  # 安全策略单测
 ```
