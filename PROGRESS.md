@@ -1,33 +1,36 @@
 # 智学 实施进度
 
-当前阶段：A 环境与骨架 —— 已完成（S01、S02 验收通过）
-已完成对话：S01 环境搭建、S02 工程骨架（2026-11-07，本次）
-下一步对话（编号+目标）：S03 接入 Pi —— 后端内嵌 Pi，封装 /api/chat（非流式）+ provider/key 配置；验收：接口可完成对话
+当前阶段：B Pi 内核与对话 —— 已完成（S03、S04 验收通过）
+已完成对话：S01、S02（阶段 A）；S03、S04（阶段 B，2026-11-07 本次）
+下一步对话（编号+目标）：S05 文档解析切片 —— /api/documents 上传，PDF/Word/MD 解析与 chunk；验收：切片结果正确、带元数据
 
 关键文件/接口：
-- docker/docker-compose.yml：etcd（quay.io/coreos/etcd:v3.5.18）+ Milvus Standalone v2.5.4，gRPC 19530、健康检查 9091/healthz
-- docker/milvus.yaml：从镜像提取的完整默认配置，仅改 common.storageType: local（见下方决策）
-- server/src/index.ts：Hono 服务，端口 3000，GET /health
-- web/：Vite + Vue3 + TS + Pinia + Vue Router + Axios，端口 5173，/api 与 /health 代理到 3000
-- 根 package.json：npm workspaces（server、web），npm run dev（concurrently 并行启动）
+- server/src/pi.ts：Pi 嵌入封装。ModelRuntime + models.json 自定义 provider（edupi），createAgentSession（noTools:'all'、thinkingLevel:'off'、SessionManager.inMemory()），会话按 sessionId 常驻 Map
+- server/src/index.ts：Hono 路由。GET /health、GET /api/model、POST /api/chat（默认非流式；stream:true 走 SSE：delta/done/error 事件）
+- server/agent-workspace/AGENTS.md：Tutor 主讲系统提示词（Pi 自动作为上下文加载，实测人设生效）
+- server/.env（不入库）：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL，复用本机 codex 的配置：阿里云百炼 MaaS OpenAI 兼容端点 + qwen3.8-flash
+- server/data/pi-agent/（不入库）：运行时生成的 models.json（apiKey 用 $LLM_API_KEY 环境插值）与 auth.json
+- web/src/views/ChatView.vue + stores/chat.ts + api/chat.ts + components/MarkdownView.vue：对话页（气泡、流式追加、停止/新会话、marked+KaTeX+DOMPurify 渲染）
+- 路由：/ 首页（health 状态 + 对话入口）、/chat 对话页
 
 验收证据（2026-11-07 实测）：
-- S01：curl http://localhost:9091/healthz → OK；docker ps 两容器 healthy；Node SDK（@zilliz/milvus2-sdk-node）getVersion → pkg/v2.5.4，checkHealth → isHealthy:true；19530 TCP 可达
-- S02：curl :3000/health → {"status":"ok",...}；浏览器打开 http://localhost:5173 首页显示"后端已联通"及 health JSON（Vite 代理生效）
+- S03：POST /api/chat 非流式返回真实回复（Tutor 人设生效）；GET /api/model 返回 provider/model/baseUrl/configured
+- S04：curl SSE 逐字 delta 正常；浏览器 /chat 页发送"求根公式"问题，流式回复完整、KaTeX 渲染 16 个公式节点；第二轮追问准确复述第一问（多轮上下文生效）；vue-tsc + vite build 通过
 
 启动方式：
-- npm install
-- npm run milvus:up（镜像已在本机；重启机器后需先启动 Docker Desktop）
-- npm run dev（server 3000 + web 5173）
-- npm run milvus:health 检查 Milvus
+- npm run milvus:up（阶段 C 才用到，可后置）
+- npm run dev（server 3000 + web 5173）；浏览器 http://localhost:5173/chat
 
 关键决策与偏离（需评审知悉）：
-1. 免 MinIO：MinIO 官方镜像 2026-09-11 从 Docker Hub 下架（bitnami/minio 同步消失），quay.io/minio/minio 转私有不可拉。改用 Milvus 2.5 原生 common.storageType=local（数据落 /var/lib/milvus 卷），单用户本地场景功能等价、运维更简。设计文档 5.7.5 的"etcd+MinIO+Milvus 三件套"相应简化为两容器。BM25/RRF/HNSW 能力不受影响（S06 需实测确认 local 模式下 Function/索引正常）。
-2. 镜像源：Docker Hub 直连被墙；milvusdb/milvus 走 docker.m.daocloud.io 成功；etcd 走 quay.io 直连成功。daocloud 不支持 quay.io 前缀、封禁 minio 仓库。
-3. Node 实测 v24.14.0；npm registry 已为 npmmirror。
-4. 设计文档引用的 setup-matt-pocock-skills 技能在本会话不可用，未使用。
+1. 模型 provider：复用本机已有的阿里云百炼 MaaS 端点（qwen3.8-flash，OpenAI 兼容），未装 Ollama。密钥只存 server/.env（gitignore），models.json 用环境插值不落盘明文。
+2. Pi 嵌入方式：官方 SDK createAgentSession；自定义 provider 走 models.json（ModelRuntime 加载）；PI_OFFLINE=1 跳过内置 provider 的境外目录刷新。
+3. 前端 SSE 用 fetch + ReadableStream 解析（POST 场景 EventSource 不适用），事件协议与设计一致。
+4. 阶段 B 会话为进程内 Map + inMemory 日志，重启丢失；持久化会话属后续阶段（设计 5.5 可续任务在 P1）。
+5. 阶段 A 决策延续：Milvus local 存储免 MinIO（官方镜像已下架）。
+6. setup-matt-pocock-skills 技能本会话不可用，未使用。
 
 遗留问题与风险：
-- 阶段 B 需确定模型 provider（云端 API Key 或本地 Ollama，本机 Ollama 未安装，S01 中为可选项）
+- S05 需要文件解析库（pdfjs-dist/mammoth 等），npmmirror 可装
 - S06 灌库前需验证 local 存储模式下 BM25 Function 与 HNSW 索引可用
-- @zilliz/milvus2-sdk-node 目前以 --no-save 装在根 node_modules 供验证用；S06 时正式加入 server 依赖
+- @zilliz/milvus2-sdk-node 目前以 --no-save 装在根 node_modules；S06 时正式加入 server 依赖
+- 浏览器自动化工具的 click 对该页按钮偶发不触发（DOM 检查确认功能正常，人工点击不受影响）

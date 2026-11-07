@@ -28,5 +28,8 @@ onMounted(async () => {
       <p>请先运行 <code>npm run dev:server</code>（端口 3000）。</p>
     </section>
     <p v-else>正在检查后端连接…</p>
+    <p style="margin-top: 24px">
+      <router-link to="/chat" style="color: #2563eb">进入对话页 →</router-link>
+    </p>
   </main>
 </template>
