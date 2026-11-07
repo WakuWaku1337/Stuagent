@@ -15,13 +15,14 @@
     "gray-matter": "^4.0.3",
     "hono": "^4.6.14",
     "iconv-lite": "^0.7.3",
+    "jiti": "^2.4.2",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "^6.5.438",
+    "typebox": "^1.3.27",
     "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "jiti": "^2.4.2",
     "typescript": "^5.7.2"
   }
 }

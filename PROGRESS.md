@@ -1,6 +1,6 @@
 # 智学 实施进度
 
-当前阶段：H 进阶与收尾 —— 已完成（S17、S18 验收通过）
+当前阶段：H 进阶与收尾 —— 已完成（S17、S18 验收通过）；已增加 Docker 本地部署
 已完成对话：S01–S18 全部完成（A–H，2026-11-07）
 下一步对话：无（设计文档 18 次对话已走完）；可选增强见"遗留问题与风险"
 
@@ -23,8 +23,8 @@
 - S18 全流程回归：16/16 PASS（health、model、agents、documents、memory、mastery、wrongbook、reviews、courseware、tasks、RAG、注入拦截、SPA、SPA 回退、API 404、非流式对话）
 
 启动方式：
-- npm run milvus:up；npm run build（前端构建后由后端 :3000 托管，也可用 npm run dev 开发）
-- 页面：/ /chat /documents /quiz /wrongbook /mastery /exam /tasks /review /courseware
+- 开发：npm run milvus:up；npm run dev（server 3000 + web 5173）
+- Docker（本地试用，2026-11-07 实测）：docker compose -f docker/docker-compose.yml up -d --build；访问 http://localhost:3000；数据挂载 server/data 与 server/uploads；容器内 Milvus 地址 milvus:19530；实测 health、模型、SPA、资料、RAG、对话（含引用）全部正常
 - 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts
 
 关键决策与偏离（需评审知悉）：

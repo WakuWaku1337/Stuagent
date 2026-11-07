@@ -79,3 +79,22 @@ node --import jiti/register scripts/check-security.ts  # 安全策略单测
 npm run build        # 构建 web/dist
 npm run dev:server   # :3000 同时托管 API 与前端 SPA
 ```
+
+## Docker 部署（推荐本地试用）
+
+```bash
+# 首次或代码更新后：构建镜像并启动（etcd + Milvus + 应用）
+docker compose -f docker/docker-compose.yml up -d --build
+
+# 查看状态 / 日志
+docker compose -f docker/docker-compose.yml ps
+docker compose -f docker/docker-compose.yml logs -f edu-agent
+
+# 停止
+docker compose -f docker/docker-compose.yml stop edu-agent
+```
+
+- 访问 http://localhost:3000 （API 与前端同端口，WebSocket 走同一端口 `/ws`）
+- 应用配置读取 `server/.env`（compose `env_file`）；容器内 Milvus 地址为 `milvus:19530`
+- 数据持久化：`server/data`（SQLite、模型配置）与 `server/uploads`（原始文件）以 bind mount 挂载，重建容器不丢数据
+- 镜像基于 `node:24-bookworm-slim`（`node:sqlite` 需要 Node ≥ 22.5），构建时 npm 走 npmmirror

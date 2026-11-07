@@ -1,4 +1,24 @@
 services:
+  edu-agent:
+    container_name: edu-agent
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../server/.env
+    environment:
+      PORT: 3000
+      MILVUS_ADDRESS: milvus:19530
+    volumes:
+      - ../server/data:/app/server/data
+      - ../server/uploads:/app/server/uploads
+    ports:
+      - "3000:3000"
+    depends_on:
+      milvus:
+        condition: service_healthy
+    restart: unless-stopped
+
   etcd:
     container_name: edu-milvus-etcd
     image: quay.io/coreos/etcd:v3.5.18
