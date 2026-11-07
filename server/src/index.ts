@@ -9,6 +9,7 @@ import { cancelTask, enqueue, getTask, listTasks, startQueue, taskEvents, type T
 import { chat, getModelInfo } from './pi.ts';
 import documents from './routes/documents.ts';
 import learning from './routes/learning.ts';
+import reviews from './routes/reviews.ts';
 import { searchKnowledge, type Citation } from './rag/service.ts';
 import { AGENTS, isAgentId, type AgentId } from './agents/roles.ts';
 import { routeMessage } from './agents/router.ts';
@@ -80,6 +81,7 @@ app.get('/api/model', async (c) => {
 
 app.route('/api/documents', documents);
 app.route('/api', learning);
+app.route('/api/reviews', reviews);
 
 app.post('/api/knowledge/search', async (c) => {
   const body = await c.req.json<{ query?: string; topK?: number; subject?: string }>().catch(() => null);

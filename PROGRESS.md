@@ -1,36 +1,33 @@
 # 智学 实施进度
 
-当前阶段：F 子智能体与双层编排 —— 已完成（S13、S14 验收通过）
-已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C）；S08–S12（D+E）；S13–S14（F，2026-11-07 本次）
-下一步对话（编号+目标）：S15 整卷识别 —— OCR / 多模态 exam.recognize，整卷结构化；验收：整卷可结构化
+当前阶段：G 考试复盘 —— 已完成（S15、S16 验收通过）
+已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C）；S08–S12（D+E）；S13–S14（F）；S15–S16（G，2026-11-07 本次）
+下一步对话（编号+目标）：S17 课件与安全 —— edulab 交互课件、安全 SDK（防注入/脱敏）；验收：课件可看、安全策略生效
 
 关键文件/接口：
-- server/src/agents/roles.ts：Tutor/Quizzer/Analyst/Solver 元数据（名称、职责、工具白名单）
-- server/src/agents/router.ts：路由器，规则打分优先 + LLM 分类兜底（失败回退 Tutor）
-- server/agent-workspace/roles/{tutor,quizzer,analyst,solver}/AGENTS.md：四角色系统提示词（Pi 按 cwd 加载）
-- server/src/pi.ts：会话按 `角色:会话ID` 隔离，cwd 指向角色目录，工具白名单按角色下发
-- server/src/learning/tools.ts：新增 mastery_report 工具（Analyst/Quizzer 用）
-- server/src/tasks/queue.ts：SQLite 任务表 + 单 Worker 后台队列 + 看门狗超时 + 启动恢复（queued/running → 重排，attempts 上限 3）
-- server/src/index.ts：GET /api/agents、/api/chat 支持 agent=auto|tutor|quizzer|analyst|solver（SSE 先发 route 事件）、/api/tasks（创建/列表/详情/取消）、WS /ws 推送任务事件
-- web/src/views/TasksView.vue：后台任务页（创建、状态、WS 实时事件）；对话页气泡显示角色徽标
+- server/src/learning/exams.ts：整卷识别（文本/图片）、EXAM 表读写、复盘分析（逐题判分、错因归类、BKT 与错题联动、报告生成）、趋势对比
+- server/src/learning/vision.ts：多模态识别（图片 → JSON），模型 qwen3.8-flash 支持图片输入
+- server/src/routes/reviews.ts：POST /api/reviews/recognize（multipart：图片/PDF/DOCX/文本）、GET /api/reviews、GET /api/reviews/compare、GET /api/reviews/:id、POST /api/reviews/:id/analyze
+- server/src/store.ts：exam_papers / exam_questions / exam_reviews 表
+- server/src/learning/tools.ts：新增 exam_analyze / exam_compare 工具（Analyst）
+- web/src/views/ReviewView.vue：上传整卷（拍照/PDF/Word/文本）、考试记录、报告、逐题明细、ECharts 趋势图；路由 /review
 
 验收证据（2026-11-07 实测）：
-- S13：四条输入分别路由到 tutor/quizzer/analyst/solver（规则命中理由可见）；回复具角色特征（出题=2 道单选、诊断=结构化报告、解题=证明+验算）；浏览器对话页气泡显示"Quizzer 出题"，且出题前查询掌握度选择 15% 的薄弱点
-- S14 不阻塞：POST /api/tasks 1s 返回 202（queued）；任务执行期间 /api/chat 正常返回（14s），任务稍后 done 并返回 session_id
-- S14 WebSocket：浏览器 /tasks 连接建立（connected/pong），任务 done 事件推送后列表自动刷新为"完成"
-- S14 可续任务：向 DB 注入一条 status=running 的中断任务 → 重启服务 → attempts=1 自动重排 → 执行完成（done + session_id）
-- S14 看门狗：TASK_TIMEOUT_MS=2000 启动，任务 2s 后被标记 status=timeout，error="超过 2000ms 未完成"
-- S14 分析类任务：background analysis 输出诊断报告（Analyst 角色）
+- S15 文本整卷：exam-1.md 识别 7 题、总分 50、得分 38，题型/知识点/学生答案/正确答案/老师批注错因全部结构化；exam-2.md 识别 6 题 48/50
+- S15 拍照整卷：Edge 生成试卷截图 exam-photo.png → 视觉模型识别 2 题、14/20，勾叉批注转为 error_reason
+- S16 复盘：exam-1 得分率 76%，失分知识点 2 个，新增错题 2 道，7 个知识点 BKT 更新（薄弱项 15%）；报告含总体/失分分布/错因/建议；exam-2 复盘 96%
+- S16 趋势：3 次考试 76% → 96% → 70%，weakest 知识点累计失分排序；浏览器复盘页显示考试列表、报告、逐题明细与趋势图（canvas）
+- Analyst 工具：对话"对比最近几次考试趋势"路由到 Analyst，输出趋势诊断（含"立体几何无数据"盲区提示）
 
 关键决策与偏离（需评审知悉）：
-1. 路由器采用"关键词规则打分 + LLM 分类兜底"，非完整事件总线；符合设计 5.5.4 对单用户场景的裁剪。
-2. 可续任务以"任务行持久化 + 重启重排"实现；Pi 子会话本身仍为 inMemory，重启后角色对话上下文不保留（任务结果保留）。设计中的 append-only 可回放会话日志属 P2。
-3. Worker 串行处理后台任务（单用户足够）；看门狗为进程内定时器，非外部监工进程。
-4. 角色切换按单条消息路由，各角色会话历史独立；跨角色共享的是画像/记忆/掌握度（SQLite），不是对话上下文。
-5. WebSocket 使用 @hono/node-ws；Vite 已配置 /ws 代理。
+1. OCR 采用多模态大模型（qwen3.8-flash 视觉输入）直接识别整卷，未引入独立 OCR MCP；PDF 走文本解析（扫描版 PDF 需先转图片）。
+2. 判分以老师批改/卷面得分为准；错因优先采用卷面批注，缺失时由 LLM 在五类中归因。
+3. 竞赛/考试选择题与解答题的 is_correct 以 got_score < full_score 判定失分；部分得分（如 8/14）也计入错题本。
+4. 复盘报告与趋势结论由 LLM 基于统计事实生成，报告中的数字均来自数据；统计兜底模板在 LLM 失败时使用。
+5. 未实现设计 7.1 的 EXAM_REVIEW.loss_analysis 独立字段文本化（以 JSON 存入 loss_analysis 列）。
 6. setup-matt-pocock-skills 技能本会话不可用，未使用。
 
 遗留问题与风险：
-- 同一会话跨角色时上下文不连续（设计上 Tutor 可转交，后续可由 Router 汇总）
-- 后台任务失败只记录 error，未做重试策略（除恢复时的 attempts）
-- S15 需要 OCR/多模态通道；当前只有文本模型，需确认拍照识别方案（可用多模态模型或 OCR MCP）
+- 扫描版 PDF 未做逐页转图 OCR（可后续用 pdfjs 渲染 + 视觉模型）
+- 识别结果无人工校对界面（当前直接落库，可加"编辑题目"能力）
+- S17 需要 edulab/安全 SDK 的接入方案（课件可先做 HTML iframe 托管，安全做输入/输出策略）

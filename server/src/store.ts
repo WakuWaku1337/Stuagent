@@ -131,6 +131,45 @@ db.exec(`
     finished_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, created_at);
+
+  CREATE TABLE IF NOT EXISTS exam_papers (
+    exam_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    subject TEXT,
+    exam_date TEXT,
+    total_score REAL,
+    my_score REAL,
+    duration INTEGER,
+    source TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS exam_questions (
+    exam_question_id TEXT PRIMARY KEY,
+    exam_id TEXT NOT NULL,
+    question_no INTEGER NOT NULL,
+    question_type TEXT,
+    full_score REAL,
+    got_score REAL,
+    is_correct INTEGER,
+    student_answer TEXT,
+    correct_answer TEXT,
+    error_reason TEXT,
+    knowledge_point TEXT,
+    content TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_exam_questions ON exam_questions(exam_id);
+
+  CREATE TABLE IF NOT EXISTS exam_reviews (
+    review_id TEXT PRIMARY KEY,
+    exam_id TEXT NOT NULL,
+    summary TEXT,
+    loss_analysis TEXT,
+    suggestions TEXT,
+    report TEXT,
+    generated_at INTEGER NOT NULL
+  );
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];

@@ -23,8 +23,8 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
   analyst: {
     id: 'analyst',
     name: 'Analyst 诊断',
-    description: '掌握度分析、薄弱点诊断、错题与复习建议',
-    tools: ['mastery_report', 'wrongbook_due', 'knowledge_search'],
+    description: '掌握度分析、薄弱点诊断、考试复盘与趋势对比',
+    tools: ['mastery_report', 'wrongbook_due', 'knowledge_search', 'exam_analyze', 'exam_compare'],
   },
   solver: {
     id: 'solver',

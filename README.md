@@ -54,5 +54,8 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/exam/start · /api/exam/:id/submit | 模考开始 / 交卷分析 |
 | GET | /api/agents | 子智能体列表（Tutor/Quizzer/Analyst/Solver） |
 | POST | /api/tasks · GET /api/tasks/:id | 后台任务（quiz/analysis），202 入队；WS `/ws` 推送进度 |
+| POST | /api/reviews/recognize | 整卷识别（拍照 PNG/JPG、PDF、DOCX、文本） |
+| GET | /api/reviews · /api/reviews/:id · /api/reviews/compare | 考试记录 / 详情 / 趋势对比 |
+| POST | /api/reviews/:id/analyze | 生成复盘报告（判分、错因、BKT、错题联动） |
 
-页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务。
+页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘。

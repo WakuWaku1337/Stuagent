@@ -183,5 +183,34 @@ export function createLearningTools() {
     },
   });
 
-  return [memoryWrite, memoryRecall, wrongbookAdd, masteryUpdate, quizGenerate, dueWrong, masteryReport];
+  const examAnalyze = defineTool({
+    name: 'exam_analyze',
+    label: '考试复盘',
+    description: '对已识别的整卷生成复盘报告（逐题判分、错因归类、失分分布、建议），并联动掌握度与错题本。',
+    parameters: Type.Object({
+      exam_id: Type.String({ description: '试卷 ID（/api/reviews 列表中的 exam_id）' }),
+    }),
+    async execute(_id, params) {
+      const { analyzeExam } = await import('./exams.ts');
+      const result = await analyzeExam(params.exam_id);
+      return { content: [{ type: 'text' as const, text: result.report }], details: result.stats };
+    },
+  });
+
+  const examCompare = defineTool({
+    name: 'exam_compare',
+    label: '考试趋势对比',
+    description: '对比多次考试得分率与累计失分知识点，输出趋势结论。',
+    parameters: Type.Object({
+      subject: Type.Optional(Type.String({ description: '学科过滤，可选' })),
+    }),
+    async execute(_id, params) {
+      const { compareExams } = await import('./exams.ts');
+      const result = compareExams(params.subject);
+      const text = `${result.summary}\n\n${result.series.map((s) => `- ${s.date} ${s.name}：${s.score}/${s.total}（${s.rate}%）`).join('\n')}`;
+      return { content: [{ type: 'text' as const, text }], details: result };
+    },
+  });
+
+  return [memoryWrite, memoryRecall, wrongbookAdd, masteryUpdate, quizGenerate, dueWrong, masteryReport, examAnalyze, examCompare];
 }
