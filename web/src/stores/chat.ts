@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { streamChat } from '../api/chat';
+import { streamChat, type Citation } from '../api/chat';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  citations?: Citation[];
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -29,6 +30,9 @@ export const useChatStore = defineStore('chat', () => {
         sessionId.value,
         (event) => {
           if (event.type === 'delta' && event.text) reply.content += event.text;
+          if (event.type === 'citations' && event.citations) {
+            reply.citations = [...(reply.citations ?? []), ...event.citations];
+          }
           if (event.type === 'error') error.value = event.message ?? '对话出错';
         },
         controller.signal,

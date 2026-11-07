@@ -5,6 +5,8 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { chat, getModelInfo } from './pi.ts';
+import documents from './routes/documents.ts';
+import { searchKnowledge, type Citation } from './rag/service.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const envPath = resolve(serverRoot, '.env');
@@ -25,6 +27,20 @@ app.get('/api/model', async (c) => {
     return c.json(await getModelInfo());
   } catch (e) {
     return c.json({ configured: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+app.route('/api/documents', documents);
+
+app.post('/api/knowledge/search', async (c) => {
+  const body = await c.req.json<{ query?: string; topK?: number; subject?: string }>().catch(() => null);
+  const query = body?.query?.trim();
+  if (!query) return c.json({ error: 'query 不能为空' }, 400);
+  try {
+    const result = await searchKnowledge(query, { topK: body?.topK, subject: body?.subject });
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }
 });
 
@@ -55,8 +71,16 @@ app.post('/api/chat', async (c) => {
   }
 
   try {
-    const text = await chat(sessionId, message, () => {}, c.req.raw.signal);
-    return c.json({ sessionId, reply: text });
+    const citations: Citation[] = [];
+    const text = await chat(
+      sessionId,
+      message,
+      (event) => {
+        if (event.citations) citations.push(...event.citations);
+      },
+      c.req.raw.signal,
+    );
+    return c.json({ sessionId, reply: text, citations });
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }

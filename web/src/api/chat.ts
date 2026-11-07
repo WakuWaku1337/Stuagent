@@ -1,7 +1,19 @@
+export interface Citation {
+  index: number;
+  chunk_id: string;
+  source_id: string;
+  source_name: string;
+  chapter: string;
+  page: number;
+  score: number;
+  snippet: string;
+}
+
 export interface ChatStreamEvent {
-  type: 'delta' | 'done' | 'error';
+  type: 'delta' | 'done' | 'error' | 'citations';
   text?: string;
   message?: string;
+  citations?: Citation[];
 }
 
 export async function streamChat(

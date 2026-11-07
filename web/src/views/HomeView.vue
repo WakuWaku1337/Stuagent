@@ -30,6 +30,8 @@ onMounted(async () => {
     <p v-else>正在检查后端连接…</p>
     <p style="margin-top: 24px">
       <router-link to="/chat" style="color: #2563eb">进入对话页 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/documents" style="color: #2563eb">资料库 →</router-link>
     </p>
   </main>
 </template>

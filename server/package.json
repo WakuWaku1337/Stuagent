@@ -10,7 +10,13 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.0",
     "@hono/node-server": "^1.13.7",
-    "hono": "^4.6.14"
+    "@zilliz/milvus2-sdk-node": "^3.0.6",
+    "gray-matter": "^4.0.3",
+    "hono": "^4.6.14",
+    "iconv-lite": "^0.7.3",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.5.438",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

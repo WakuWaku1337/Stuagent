@@ -8,15 +8,18 @@ import {
   SessionManager,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
+import { createKnowledgeTool } from './rag/tool.ts';
+import type { Citation } from './rag/service.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const agentDir = join(serverRoot, 'data', 'pi-agent');
 const workspaceDir = join(serverRoot, 'agent-workspace');
 
 export interface ChatEvent {
-  type: 'delta' | 'done' | 'error';
+  type: 'delta' | 'done' | 'error' | 'citations';
   text?: string;
   message?: string;
+  citations?: Citation[];
 }
 
 let runtimePromise: Promise<{ runtime: ModelRuntime; registry: ModelRegistry }> | null = null;
@@ -78,6 +81,7 @@ async function getRuntime() {
 }
 
 const sessions = new Map<string, AgentSession>();
+const citationSinks = new Map<string, (c: Citation[]) => void>();
 
 async function getSession(sessionId: string): Promise<AgentSession> {
   const existing = sessions.get(sessionId);
@@ -90,7 +94,8 @@ async function getSession(sessionId: string): Promise<AgentSession> {
     modelRuntime: runtime,
     model,
     thinkingLevel: 'off',
-    noTools: 'all',
+    tools: ['knowledge_search'],
+    customTools: [createKnowledgeTool((citations) => citationSinks.get(sessionId)?.(citations))],
     sessionManager: SessionManager.inMemory(),
   });
   sessions.set(sessionId, session);
@@ -119,6 +124,9 @@ export async function chat(
   let fullText = '';
   let errorMessage = '';
 
+  const sink = (citations: Citation[]) => onEvent({ type: 'citations', citations });
+  citationSinks.set(sessionId, sink);
+
   const unsubscribe = session.subscribe((event) => {
     if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
       fullText += event.assistantMessageEvent.delta;
@@ -137,6 +145,7 @@ export async function chat(
     await session.prompt(message);
   } finally {
     unsubscribe();
+    citationSinks.delete(sessionId);
     signal?.removeEventListener('abort', abortHandler);
   }
 

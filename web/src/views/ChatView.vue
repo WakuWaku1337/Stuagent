@@ -44,6 +44,15 @@ watch(
         <div class="bubble" :class="m.role">
           <MarkdownView v-if="m.role === 'assistant'" :text="m.content || '…'" />
           <template v-else>{{ m.content }}</template>
+          <div v-if="m.citations?.length" class="citations">
+            <div v-for="c in m.citations" :key="c.chunk_id" class="citation">
+              <span class="cite-idx">[{{ c.index }}]</span>
+              <span class="cite-src">
+                《{{ c.source_name }}》{{ c.chapter ? ` · ${c.chapter}` : '' }}{{ c.page ? ` · 第${c.page}页` : '' }}
+              </span>
+              <div class="cite-snippet">{{ c.snippet }}</div>
+            </div>
+          </div>
         </div>
       </div>
       <p v-if="chat.error" class="error">{{ chat.error }}</p>
@@ -126,6 +135,27 @@ watch(
 .error {
   color: #dc2626;
   text-align: center;
+}
+.citations {
+  margin-top: 10px;
+  border-top: 1px dashed #d1d5db;
+  padding-top: 8px;
+  font-size: 13px;
+}
+.citation {
+  margin-bottom: 6px;
+}
+.cite-idx {
+  color: #2563eb;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.cite-src {
+  color: #374151;
+}
+.cite-snippet {
+  color: #6b7280;
+  margin-top: 2px;
 }
 .input-bar {
   display: flex;
