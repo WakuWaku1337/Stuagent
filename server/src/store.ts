@@ -255,6 +255,17 @@ db.exec(`
     FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
   );
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS media (
+    media_id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_media_hash ON media(hash);
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];

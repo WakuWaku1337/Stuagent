@@ -183,6 +183,7 @@ export function addMessage(
     attachments?: unknown;
     agent?: string | null;
     citations?: Citation[];
+    title?: string;
   },
 ): Message {
   const conversation = db
@@ -212,7 +213,7 @@ export function addMessage(
   let title = conversation.title;
   let titleAuto = conversation.title_auto;
   if (input.role === 'user' && titleAuto === 1) {
-    title = titleFromMessage(input.content);
+    title = input.title?.trim() || titleFromMessage(input.content);
     titleAuto = 0;
   }
   db.prepare('UPDATE conversations SET title = ?, title_auto = ?, updated_at = ? WHERE conversation_id = ?').run(

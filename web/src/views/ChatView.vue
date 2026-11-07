@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Clock, Promotion, Refresh, VideoPause } from '@element-plus/icons-vue';
+import { Clock, Camera, Picture, Promotion, Refresh, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { useChatStore } from '../stores/chat';
+import { useChatStore, type ChatMessage } from '../stores/chat';
 import MarkdownView from '../components/MarkdownView.vue';
 import ChatHistory from '../components/ChatHistory.vue';
 import type { ConversationItem } from '../api/conversations';
+import { api } from '../api/data';
 
 const chat = useChatStore();
 const route = useRoute();
@@ -15,6 +16,9 @@ const input = ref('');
 const reasoning = ref<'default' | 'low' | 'medium' | 'high'>('default');
 const listEl = ref<HTMLElement>();
 const inputRef = ref<{ focus: () => void }>();
+const cameraInput = ref<HTMLInputElement>();
+const galleryInput = ref<HTMLInputElement>();
+const visionMode = ref<'vision' | 'ocr' | 'none'>('vision');
 const historyOpen = ref(false);
 const renameVisible = ref(false);
 const renameTarget = ref<ConversationItem | null>(null);
@@ -37,6 +41,32 @@ const stateText = computed(() => {
   return '在线 · 回答附带教材引用';
 });
 
+const canAddImages = computed(
+  () => !chat.streaming && visionMode.value !== 'none' && chat.pendingImages.length < 4,
+);
+
+const imageHint = computed(() => {
+  if (visionMode.value === 'none') return '当前模型不支持图片，请先在模型设置切换视觉模型。';
+  if (visionMode.value === 'ocr' && chat.pendingImages.length > 0) {
+    return '当前模型不直接读图，发送后先识别图片文字。';
+  }
+  return '';
+});
+
+const sendDisabled = computed(
+  () =>
+    (!input.value.trim() && chat.pendingImages.length === 0) ||
+    chat.pendingImages.some((image) => image.uploading),
+);
+
+function ocrTextOf(message: ChatMessage): string {
+  return message.attachments?.find((attachment) => attachment.ocr_text)?.ocr_text ?? '';
+}
+
+function previewList(message: ChatMessage): string[] {
+  return (message.attachments ?? []).map((attachment) => attachment.url);
+}
+
 let stickToBottom = true;
 
 function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
@@ -53,7 +83,8 @@ function onThreadScroll() {
 
 async function send() {
   const text = input.value;
-  if (!text.trim() || chat.streaming) return;
+  if ((!text.trim() && chat.pendingImages.length === 0) || chat.streaming) return;
+  if (chat.pendingImages.some((image) => image.uploading)) return;
   input.value = '';
   stickToBottom = true;
   await chat.send(text, reasoning.value === 'default' ? undefined : reasoning.value);
@@ -62,6 +93,25 @@ async function send() {
 function usePrompt(prompt: string) {
   input.value = prompt;
   nextTick(() => inputRef.value?.focus());
+}
+
+function pickCamera() {
+  if (!canAddImages.value) return;
+  cameraInput.value?.click();
+}
+
+function pickGallery() {
+  if (!canAddImages.value) return;
+  galleryInput.value?.click();
+}
+
+async function onFilesSelected(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  input.value = '';
+  if (files.length === 0) return;
+  const errors = await chat.addImages(files);
+  if (errors.length > 0) ElMessage.error(errors[0]);
 }
 
 async function selectConversation(id: string) {
@@ -191,6 +241,12 @@ onMounted(async () => {
   chat.hydrate();
   const id = typeof route.query.c === 'string' ? route.query.c : '';
   await chat.loadConversations(chat.search);
+  try {
+    const model = await api.model();
+    visionMode.value = model.image_mode ?? (model.vision === false ? 'none' : 'vision');
+  } catch {
+    visionMode.value = 'vision';
+  }
   if (id) {
     stickToBottom = true;
     await chat.open(id);
@@ -263,7 +319,7 @@ onMounted(async () => {
           <p class="chat-empty-kicker">主讲老师</p>
           <h2 class="chat-empty-title">先说清楚卡在哪一步。</h2>
           <p class="chat-empty-desc">
-            可以直接问概念、贴题目，或让我基于资料库讲解。回答会标注引用来源，便于回查原文。
+            可以直接问概念、贴题目或发一张题目照片。回答会标注引用来源，便于回查原文。
           </p>
           <div class="prompt-grid">
             <button
@@ -284,7 +340,30 @@ onMounted(async () => {
               <el-tag size="small" effect="plain">{{ m.agent ?? '智学主讲' }}</el-tag>
             </div>
             <MarkdownView v-if="m.role === 'assistant'" :text="m.content || ' '" />
-            <p v-else class="user-text">{{ m.content }}</p>
+            <template v-else>
+              <div
+                v-if="m.attachments?.length"
+                class="msg-images"
+                :class="{ single: m.attachments?.length === 1 }"
+              >
+                <el-image
+                  v-for="(attachment, ai) in m.attachments"
+                  :key="attachment.media_id"
+                  :src="attachment.url"
+                  fit="cover"
+                  class="msg-image"
+                  :preview-src-list="previewList(m)"
+                  :initial-index="ai"
+                  preview-teleported
+                  hide-on-click-modal
+                />
+              </div>
+              <p v-if="m.content" class="user-text">{{ m.content }}</p>
+              <details v-if="ocrTextOf(m)" class="ocr-block">
+                <summary>识别文字</summary>
+                <p>{{ ocrTextOf(m) }}</p>
+              </details>
+            </template>
 
             <span
               v-if="chat.streaming && m.role === 'assistant' && !m.content"
@@ -326,27 +405,84 @@ onMounted(async () => {
 
     <div class="composer-wrap">
       <div class="composer">
-        <el-input
-          ref="inputRef"
-          v-model="input"
-          type="textarea"
-          :autosize="{ minRows: 1, maxRows: 5 }"
-          resize="none"
-          placeholder="输入问题，Enter 发送，Shift + Enter 换行"
-          @keydown.enter.exact.prevent="send"
-        />
-        <el-button
-          v-if="!chat.streaming"
-          type="primary"
-          :icon="Promotion"
-          :disabled="!input.trim()"
-          @click="send"
-        >
-          发送
-        </el-button>
-        <el-button v-else :icon="VideoPause" @click="chat.stop()">停止</el-button>
+        <div class="composer-body">
+          <div v-if="chat.pendingImages.length" class="image-strip">
+            <div v-for="image in chat.pendingImages" :key="image.id" class="image-chip">
+              <img :src="image.previewUrl" :alt="image.name" />
+              <span v-if="image.uploading" class="image-chip-mask">上传中…</span>
+              <button
+                v-else
+                type="button"
+                class="image-chip-remove"
+                aria-label="移除图片"
+                @click="chat.removeImage(image.id)"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <p v-if="imageHint" class="image-hint">{{ imageHint }}</p>
+          <div class="composer-row">
+            <div class="composer-tools">
+              <el-button
+                text
+                circle
+                :icon="Camera"
+                aria-label="拍照"
+                title="拍照"
+                :disabled="!canAddImages"
+                @click="pickCamera"
+              />
+              <el-button
+                text
+                circle
+                :icon="Picture"
+                aria-label="上传图片"
+                title="上传图片"
+                :disabled="!canAddImages"
+                @click="pickGallery"
+              />
+            </div>
+            <el-input
+              ref="inputRef"
+              v-model="input"
+              type="textarea"
+              :autosize="{ minRows: 1, maxRows: 5 }"
+              resize="none"
+              placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+              @keydown.enter.exact.prevent="send"
+            />
+            <el-button
+              v-if="!chat.streaming"
+              type="primary"
+              :icon="Promotion"
+              :disabled="sendDisabled"
+              @click="send"
+            >
+              发送
+            </el-button>
+            <el-button v-else :icon="VideoPause" @click="chat.stop()">停止</el-button>
+          </div>
+        </div>
       </div>
-      <p class="composer-hint">Enter 发送 · Shift + Enter 换行 · 会话与引用保存在本机</p>
+      <p class="composer-hint">Enter 发送 · Shift + Enter 换行 · 支持拍照或上传题目图片</p>
+      <input
+        ref="cameraInput"
+        class="file-input"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        multiple
+        @change="onFilesSelected"
+      />
+      <input
+        ref="galleryInput"
+        class="file-input"
+        type="file"
+        accept="image/*"
+        multiple
+        @change="onFilesSelected"
+      />
     </div>
     </section>
 
@@ -614,6 +750,53 @@ onMounted(async () => {
   overflow-wrap: anywhere;
 }
 
+.msg-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-width: 340px;
+  margin-bottom: 8px;
+}
+
+.msg-images.single {
+  grid-template-columns: 1fr;
+  max-width: 260px;
+}
+
+.msg-image {
+  width: 100%;
+  height: 118px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #e9edeb;
+  cursor: zoom-in;
+}
+
+.msg-images.single .msg-image {
+  height: 178px;
+}
+
+.ocr-block {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 11.5px;
+  color: rgba(243, 246, 244, 0.76);
+}
+
+.ocr-block summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.ocr-block p {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  line-height: 1.65;
+}
+
 .bubble.assistant :deep(.markdown) {
   font-size: 14px;
 }
@@ -719,17 +902,48 @@ onMounted(async () => {
 }
 
 .composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
   width: 100%;
   max-width: 920px;
   margin: 0 auto;
-  padding: 9px 10px 9px 14px;
+  padding: 8px 10px;
   background: #fff;
   border: 1px solid var(--line-strong);
   border-radius: 13px;
   box-shadow: 0 6px 18px rgba(21, 32, 43, 0.05);
+}
+
+.composer-body {
+  min-width: 0;
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  padding-bottom: 2px;
+  flex: none;
+}
+
+.composer-tools :deep(.el-button) {
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  color: var(--muted);
+}
+
+.composer-tools :deep(.el-button:hover:not(.is-disabled)) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.composer-row :deep(.el-input) {
+  flex: 1;
+  min-width: 0;
 }
 
 .composer :deep(.el-textarea__inner) {
@@ -744,9 +958,72 @@ onMounted(async () => {
   box-shadow: none;
 }
 
-.composer :deep(.el-button) {
+.composer-row :deep(.el-button) {
   flex: none;
   height: 34px;
+}
+
+.image-strip {
+  display: flex;
+  gap: 8px;
+  padding: 2px 2px 9px;
+  overflow-x: auto;
+}
+
+.image-chip {
+  position: relative;
+  flex: none;
+  width: 66px;
+  height: 66px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.image-chip img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-chip-mask {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(21, 32, 43, 0.48);
+  color: #fff;
+  font-size: 10.5px;
+}
+
+.image-chip-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(21, 32, 43, 0.72);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-hint {
+  padding: 0 2px 7px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.file-input {
+  display: none;
 }
 
 .composer-hint {
@@ -788,6 +1065,10 @@ onMounted(async () => {
 
   .bubble {
     max-width: 86%;
+  }
+
+  .msg-images {
+    max-width: 100%;
   }
 
   .composer-wrap {

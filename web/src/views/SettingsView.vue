@@ -405,7 +405,7 @@ onMounted(load);
                     :value="model.id"
                   >
                     <span class="option-main">{{ model.name }}</span>
-                    <span class="option-note">{{ model.reasoning ? '推理模型' : '标准模型' }}</span>
+                    <span class="option-note">{{ model.reasoning ? '推理模型' : '标准模型' }}{{ model.vision ? ' · 支持图片' : '' }}</span>
                   </el-option>
                 </el-select>
               </div>

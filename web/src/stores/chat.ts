@@ -1,15 +1,19 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { streamChatIn, type Citation } from '../api/chat';
+import { uploadImage } from '../api/media';
 import {
   deleteConversation as apiDeleteConversation,
   fetchConversation,
   fetchConversations,
+  parseAttachments,
   parseCitations,
   updateConversation as apiUpdateConversation,
   type ConversationItem,
   type ConversationMessage,
+  type MessageAttachment,
 } from '../api/conversations';
+import { prepareImage } from '../utils/image';
 
 export interface ChatMessage {
   message_id?: string;
@@ -17,7 +21,16 @@ export interface ChatMessage {
   content: string;
   citations?: Citation[];
   agent?: string;
+  attachments?: MessageAttachment[];
   created_at?: number;
+}
+
+export interface PendingImage {
+  id: string;
+  previewUrl: string;
+  name: string;
+  uploading: boolean;
+  media?: MessageAttachment;
 }
 
 interface RecentCacheEntry {
@@ -72,8 +85,15 @@ function fromStored(message: ConversationMessage): ChatMessage {
     content: message.content,
     agent: message.agent ?? undefined,
     citations: parseCitations(message.citations),
+    attachments: parseAttachments(message.attachments),
     created_at: message.created_at,
   };
+}
+
+function localId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function errText(error: unknown): string {
@@ -103,6 +123,7 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = ref(false);
   const error = ref('');
   const listError = ref('');
+  const pendingImages = ref<PendingImage[]>([]);
 
   let controller: AbortController | null = null;
   let listToken = 0;
@@ -137,6 +158,48 @@ export const useChatStore = defineStore('chat', () => {
     if (Array.isArray(cached)) conversations.value = cached;
   }
 
+  function removeImage(id: string) {
+    const item = pendingImages.value.find((image) => image.id === id);
+    if (item) URL.revokeObjectURL(item.previewUrl);
+    pendingImages.value = pendingImages.value.filter((image) => image.id !== id);
+  }
+
+  function clearPendingImages() {
+    for (const item of pendingImages.value) URL.revokeObjectURL(item.previewUrl);
+    pendingImages.value = [];
+  }
+
+  async function addImages(files: File[]): Promise<string[]> {
+    const errors: string[] = [];
+    const room = 4 - pendingImages.value.length;
+    if (room <= 0) return ['一次最多添加 4 张图片'];
+    if (files.length > room) errors.push(`最多添加 4 张图片，已取前 ${room} 张`);
+    for (const file of files.slice(0, room)) {
+      let item: PendingImage | null = null;
+      try {
+        const prepared = await prepareImage(file);
+        item = {
+          id: localId(),
+          previewUrl: prepared.previewUrl,
+          name: file.name,
+          uploading: true,
+        };
+        pendingImages.value.push(item);
+        const entry = pendingImages.value[pendingImages.value.length - 1]!;
+        const media = await uploadImage(prepared.file);
+        entry.media = media;
+        entry.uploading = false;
+      } catch (e) {
+        if (item) {
+          URL.revokeObjectURL(item.previewUrl);
+          pendingImages.value = pendingImages.value.filter((image) => image.id !== item!.id);
+        }
+        errors.push(errText(e));
+      }
+    }
+    return errors;
+  }
+
   async function loadConversations(q = search.value) {
     const token = ++listToken;
     loadingList.value = true;
@@ -157,6 +220,7 @@ export const useChatStore = defineStore('chat', () => {
   async function open(id: string) {
     if (!id) return;
     stop();
+    clearPendingImages();
     const token = ++openToken;
     const cached = readRecent()[id];
     const known = conversations.value.find((c) => c.conversation_id === id);
@@ -225,11 +289,23 @@ export const useChatStore = defineStore('chat', () => {
 
   async function send(text: string, reasoning?: 'low' | 'medium' | 'high') {
     const message = text.trim();
-    if (!message || streaming.value) return;
+    const images = pendingImages.value
+      .filter((image) => image.media && !image.uploading)
+      .map((image) => image.media!);
+    if ((!message && images.length === 0) || streaming.value) return;
+    if (pendingImages.value.some((image) => image.uploading)) return;
     error.value = '';
-    messages.value.push({ role: 'user', content: message, created_at: Date.now() });
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: message,
+      attachments: images.length > 0 ? images : undefined,
+      created_at: Date.now(),
+    };
+    messages.value.push(userMessage);
     const reply: ChatMessage = { role: 'assistant', content: '', created_at: Date.now() };
     messages.value.push(reply);
+    const mediaIds = images.map((image) => image.media_id);
+    clearPendingImages();
     streaming.value = true;
     controller = new AbortController();
     let activeConversation = conversationId.value;
@@ -245,6 +321,9 @@ export const useChatStore = defineStore('chat', () => {
               conversationTitle.value = event.title ?? '';
             }
           }
+          if (event.type === 'media' && event.attachments?.length) {
+            userMessage.attachments = event.attachments;
+          }
           if (event.type === 'delta' && event.text) reply.content += event.text;
           if (event.type === 'citations' && event.citations) {
             reply.citations = [...(reply.citations ?? []), ...event.citations];
@@ -254,6 +333,7 @@ export const useChatStore = defineStore('chat', () => {
         },
         controller.signal,
         reasoning,
+        mediaIds.length > 0 ? mediaIds : undefined,
       );
       if (!reply.content && !error.value) error.value = '未收到回复';
     } catch (e) {
@@ -278,6 +358,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function reset() {
     stop();
+    clearPendingImages();
     messages.value = [];
     conversationId.value = '';
     conversationTitle.value = '';
@@ -352,8 +433,12 @@ export const useChatStore = defineStore('chat', () => {
     streaming,
     error,
     listError,
+    pendingImages,
     hydrate,
     loadConversations,
+    addImages,
+    removeImage,
+    clearPendingImages,
     open,
     send,
     stop,

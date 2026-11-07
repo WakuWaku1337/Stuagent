@@ -12,6 +12,16 @@ export interface ConversationItem {
   preview: string | null;
 }
 
+export interface MessageAttachment {
+  type: 'image';
+  media_id: string;
+  url: string;
+  filename: string;
+  mime: string;
+  size: number;
+  ocr_text?: string;
+}
+
 export interface ConversationMessage {
   message_id: string;
   conversation_id: string;
@@ -91,6 +101,24 @@ export function parseCitations(raw: string | null): Citation[] | undefined {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? (parsed as Citation[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseAttachments(raw: string | null): MessageAttachment[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const items = parsed.filter(
+      (item): item is MessageAttachment =>
+        Boolean(item) &&
+        item.type === 'image' &&
+        typeof item.media_id === 'string' &&
+        typeof item.url === 'string',
+    );
+    return items.length > 0 ? items : undefined;
   } catch {
     return undefined;
   }

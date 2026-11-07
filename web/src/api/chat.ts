@@ -1,3 +1,5 @@
+import type { MessageAttachment } from './conversations';
+
 export interface Citation {
   index: number;
   chunk_id: string;
@@ -10,7 +12,15 @@ export interface Citation {
 }
 
 export interface ChatStreamEvent {
-  type: 'delta' | 'done' | 'error' | 'citations' | 'route' | 'conversation' | 'security';
+  type:
+    | 'delta'
+    | 'done'
+    | 'error'
+    | 'citations'
+    | 'route'
+    | 'conversation'
+    | 'security'
+    | 'media';
   text?: string;
   message?: string;
   citations?: Citation[];
@@ -21,6 +31,10 @@ export interface ChatStreamEvent {
   title?: string;
   created_at?: number;
   updated_at?: number;
+  vision?: boolean;
+  ocr_used?: boolean;
+  ocr_text?: string;
+  attachments?: MessageAttachment[];
 }
 
 function parseStream(
@@ -61,6 +75,7 @@ export async function streamChatIn(
   onEvent: (event: ChatStreamEvent) => void,
   signal?: AbortSignal,
   reasoning?: 'low' | 'medium' | 'high',
+  mediaIds?: string[],
 ): Promise<void> {
   const url = conversationId
     ? `/api/conversations/${encodeURIComponent(conversationId)}/messages`
@@ -68,7 +83,12 @@ export async function streamChatIn(
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, stream: true, ...(reasoning ? { reasoning } : {}) }),
+    body: JSON.stringify({
+      message,
+      stream: true,
+      ...(reasoning ? { reasoning } : {}),
+      ...(mediaIds?.length ? { mediaIds } : {}),
+    }),
     signal,
   });
   if (!res.ok || !res.body) {

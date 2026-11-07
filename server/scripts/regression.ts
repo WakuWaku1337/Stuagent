@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 let failures = 0;
 
@@ -160,6 +162,48 @@ await check('conversation rejected input not persisted', async () => {
   });
   const after = (await getJson('/api/conversations?limit=100')).body.total;
   return before === after;
+});
+
+async function uploadFixture() {
+  const png = await readFile('testdata/vision-question.png');
+  const form = new FormData();
+  form.append('file', new Blob([png], { type: 'image/png' }), 'vision-question.png');
+  const res = await fetch(BASE + '/api/media/upload', { method: 'POST', body: form });
+  return { status: res.status, body: await res.json() };
+}
+
+let mediaId = '';
+await check('media upload', async () => {
+  const { status, body } = await uploadFixture();
+  mediaId = body.media_id ?? '';
+  return (
+    status === 201 &&
+    Boolean(mediaId) &&
+    body.url === `/api/media/${mediaId}` &&
+    body.mime === 'image/png' &&
+    body.size > 1000
+  );
+});
+await check('media serve', async () => {
+  const res = await fetch(BASE + `/api/media/${mediaId}`);
+  const bytes = (await res.arrayBuffer()).byteLength;
+  return (
+    res.status === 200 &&
+    res.headers.get('content-type') === 'image/png' &&
+    res.headers.get('x-content-type-options') === 'nosniff' &&
+    bytes > 1000
+  );
+});
+await check('media dedupe', async () => {
+  const { body } = await uploadFixture();
+  return body.media_id === mediaId;
+});
+await check('media reject non-image', async () => {
+  const form = new FormData();
+  form.append('file', new Blob([Buffer.from('not an image')], { type: 'image/png' }), 'fake.png');
+  const res = await fetch(BASE + '/api/media/upload', { method: 'POST', body: form });
+  const body = await res.json();
+  return res.status === 422 && body.code === 'IMAGE_TYPE';
 });
 
 console.log(`---\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);

@@ -1,19 +1,35 @@
 # 智学 实施进度
 
-当前阶段：阶段 I · S19 会话管理已完成（2026-11-07）
+当前阶段：阶段 I · S20 图片输入已完成（2026-11-07）
+- 新增 media 表与 `POST /api/media/upload`、`GET /api/media/:id`：JPG/PNG/WebP、单张 ≤8MB、一次 ≤4 张、magic bytes 校验、hash 去重、immutable 缓存与 nosniff
+- 前端相机/相册选图、多图预览、最长边 1600px / JPEG 0.85 压缩、上传进度与移除
+- 视觉模型直读图片：Pi `session.prompt` 携带 ImageContent，模型目录增加 vision 能力标记
+- 非视觉模型 OCR 兜底：自动调用同 Provider 的视觉模型识别图片文字（可用 `LLM_OCR_MODEL` 指定），OCR 文本随消息保存并可在气泡中展开
+- 图片消息与附件落库；历史回放支持最近 2 条图片消息（最多 4 张、单张 ≤2MB），非视觉模型回放 OCR 文本；仅图片消息自动标题“图片提问（N 张）”
+
+阶段 I · S19 会话管理已完成（2026-11-07）
 - 新增 CONVERSATION/MESSAGE 持久化（SQLite）：首条消息自动生成标题，用户/助手消息与引用落库
 - 新增会话服务与接口：GET/POST `/api/conversations`、GET/PUT/DELETE `/api/conversations/:id`、GET `/api/conversations/:id/messages`、POST `/api/conversations/:id/messages`
 - 新增历史侧栏：置顶/今天/昨天/更早分组、搜索、重命名、置顶、删除、新建；桌面固定侧栏，窄屏抽屉
 - 重开续聊：旧会话加载历史消息；Pi 会话缺失时用 SQLite 历史重建上下文（跨服务重启有效）
 - 消息分页（`limit` + `before` 游标）；前端缓存会话列表与最近 5 个会话（各 40 条消息，12 小时 TTL）
-- `/api/chat` 兼容保留：无 conversationId 时自动建会话；SSE 新增 conversation 事件；流式写入串行化并冲刷，修复短回复丢帧
+- `/api/chat` 兼容保留：无 conversationId 时自动建会话；SSE 新增 conversation/media 事件；流式写入串行化并冲刷，修复短回复丢帧
 
 历史：H 进阶与收尾 —— 已完成（S17、S18 验收通过）；已增加 Docker 本地部署
 旧编号 S19/S20（模型设置、用量统计）已于 2026-11-07 完成，见下方验收证据
-已完成对话：S01–S18 全部完成（A–H）；阶段 I S19 会话管理完成
-下一步对话：S20 图片输入（拍照/上传、视觉模型/OCR、图片存储）
+已完成对话：S01–S18 全部完成（A–H）；阶段 I S19 会话管理、S20 图片输入完成
+下一步对话：S21 语音能力（ASR 输入、TTS 播报）
 
 关键文件/接口：
+- server/src/media/service.ts：图片落盘（uploads/media）、magic bytes 校验、hash 去重、附件/OCR、历史图片读取
+- server/src/routes/media.ts：POST /api/media/upload、GET /api/media/:id（ETag/immutable/nosniff）
+- server/src/chat/handler.ts：/api/chat 与 /api/conversations/:id/messages 共用处理器（安全检查、图片/OCR、落库、SSE、引用合并、写链冲刷）
+- server/src/pi.ts：`dropConversationSessions`；新 Pi 会话按 SQLite 历史回放（最近 24 条、单条 8k 上限、用户内容回放前再脱敏）；`prompt(images)` 与历史图片回放
+- server/src/settings/providers.ts：模型 vision 能力（目录标记 + ID 规则 + LLM_VISION 覆盖）与同 Provider 视觉模型查找
+- web/src/api/media.ts + web/src/utils/image.ts：图片上传、前端压缩（1600px/JPEG 0.85）
+- web/src/stores/chat.ts：待发送图片、上传状态、附件解析、发送携带 mediaIds
+- web/src/views/ChatView.vue：相机/相册按钮、缩略图预览、图片气泡、OCR 文字展开、vision/ocr 提示
+- server/scripts/check-vision.ts + server/testdata/vision-question.png：图片问答端到端脚本与测试题图
 - server/src/conversations/service.ts：CONVERSATION/MESSAGE 数据访问、自动标题、搜索、消息游标分页
 - server/src/routes/conversations.ts：会话 CRUD、消息分页、会话内继续对话
 - server/src/chat/handler.ts：/api/chat 与 /api/conversations/:id/messages 共用处理器（安全检查、落库、SSE、引用合并、写链冲刷）
@@ -33,11 +49,18 @@
 - server/src/routes/courseware.ts：/api/courseware（列表/生成/预览 HTML/删除），HTML 带 CSP 与 nosniff
 - server/src/index.ts：/api/chat 接入安全检查（400 SECURITY_BLOCKED）、输入/输出脱敏、SSE security 事件；后端托管 web/dist（SPA 回退，API 404 保持 JSON）
 - server/scripts/eval-rag.ts + server/testdata/eval-rag.json：RAG 评测集（8 题）与 Hit@K/MRR/延迟统计
-- server/scripts/regression.ts：全流程回归（21 项，含设置/用量 5 项）
+- server/scripts/regression.ts：全流程回归（32 项，含设置/用量 5 项、会话 7 项、图片 4 项）
 - server/scripts/check-security.ts：安全单测（PII/密钥/注入/流式脱敏）
 - web/src/views/CoursewareView.vue：课件页（生成、列表、沙箱 iframe 预览）；路由 /courseware
 
 验收证据（2026-11-07 实测）：
+- S20 图片链路：900×520 PNG（40,322 B）上传 201，GET 返回 `image/png` + `nosniff` + immutable；If-None-Match 返回 304；重复上传命中 hash 去重（同一 media_id）；伪造 PNG 返回 422 IMAGE_TYPE；一次 5 张返回 400
+- S20 视觉直读：发送测试题图，模型按图作答斜边 5；浏览器实测图片气泡 260×178、无 OCR 提示，标题取自文字提问
+- S20 OCR 兜底：以 `LLM_VISION=0 LLM_OCR_MODEL=qwen3.8-flash` 启动时 `/api/model` 返回 `image_mode=ocr`；同一张图 OCR 195 字并作答 5（20.3s），气泡可展开“识别文字”；仅图片消息标题为“图片提问（1 张）”
+- S20 图片上下文：服务重启后对旧图片会话追问“两条直角边分别是多少”，模型回答“3 和 4”（历史图片回放生效）
+- S20 前端：选图→压缩→上传进度→缩略图→移除流程通过；图片气泡与 OCR 文本正常；`vue-tsc -b && vite build` 通过
+- 2026-11-07 复跑全流程回归：32/32 PASS（新增 media upload、media serve、media dedupe、media reject non-image）
+- S20 图片问答脚本：`scripts/check-vision.ts` ALL PASS（上传、视觉/OCR 作答、附件落库、图片 URL 可读）
 - S19 持久化：`/api/chat` 自动建会话，首条消息生成标题；会话详情消息 2 条（user/assistant），`limit=1` 返回 hasMore=true，继续对话回复 20（引用上一轮答案 2）；删除后 GET 返回 404，注入输入不产生会话
 - S19 续聊：服务重启后打开旧会话，询问“最开始问的原话”，模型返回“1+1等于几？只回答数字”；跨重启上下文由 SQLite 历史回放重建
 - S19 历史侧栏：搜索“勾股”命中 2 条；重命名、置顶（进入置顶分组第一）、删除并清空当前会话均通过；45 条测试会话首次加载 30 条，点“加载更早的消息”后 45 条
@@ -61,7 +84,7 @@
 启动方式：
 - 开发：npm run milvus:up；npm run dev（server 3000 + web 5173）
 - Docker（本地试用，2026-11-07 实测）：docker compose -f docker/docker-compose.yml up -d --build；访问 http://localhost:3000；数据挂载 server/data 与 server/uploads；容器内 Milvus 地址 milvus:19530；实测 health、模型、SPA、资料、RAG、对话（含引用）全部正常
-- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts
+- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts；图片问答：scripts/check-vision.ts
 
 关键决策与偏离（需评审知悉）：
 1. 安全为自研轻量策略（规则 + 脱敏 + 流式过滤），未接入 SuperAgent 安全 SDK（设计与 §4.3 均标注其为 P2 可选）。
@@ -73,6 +96,9 @@
 7. 设计文档改版后，“阶段 I · S19”指会话管理；本文旧记录中的“S19 模型设置 / S20 用量统计”是旧编号，功能均已完成，勿混淆。
 8. 会话标题采用本地规则（首条用户消息压缩至 ≤24 字），不额外调用 LLM 生成摘要，避免首轮延迟与成本。
 9. Pi 会话不落 JSONL：SQLite 为唯一事实源，新建 Pi 会话时回放最近 24 条消息（单条 ≤8000 字），用户历史回放前再次 PII 脱敏。
+10. 图片 OCR 不引入本地 tesseract：优先用同 Provider 的视觉模型识别（可 `LLM_OCR_MODEL` 指定模型）；没有可用视觉模型时直接拒绝图片并提示切换模型，不做假 OCR。
+11. 图片压缩在前端完成（最长边 1600px、JPEG 0.85）；服务端只做 magic bytes 校验、8MB/4 张上限与 hash 去重，不做二次缩放。
+12. 历史回放图片有上限：最近 2 条图片消息、最多 4 张、单张 ≤2MB；非视觉模型回放保存的 OCR 文本，避免重复 OCR。
 
 遗留问题与风险：
 - GitHub 直连依赖 SteamTools TLS 代理 + 仓库级 CA；gh 尚未登录，triage 标签未创建；本地历史与远程初始提交不相关，尚未推送
@@ -80,3 +106,6 @@
 - 引用卡片会累积低相关项；后台任务单 Worker 串行且失败无重试
 - 会话搜索为 `LIKE`（标题/消息内容），消息量很大时无 FTS 索引；上下文回放只取最近 24 条，超长会话的早期细节可能丢失
 - 同一会话内不同角色仍各用独立 Pi 会话，但会通过 SQLite 历史重建共享上下文；跨会话仅共享画像/记忆/掌握度
+- 图片上传后若未发送或会话被删，文件暂为孤儿，等 S22 存储治理统一回收；当前没有单张删除接口
+- 图片内容本身可能含提示注入；OCR 文本已加“仅作解题材料”包裹，但未做图像级内容审核
+- HEIC 等格式依赖浏览器解码，无法解码时提示改用 JPG/PNG；OCR 会额外消耗一次模型调用（实测约 20s）

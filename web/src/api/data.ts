@@ -6,6 +6,8 @@ export interface ModelInfo {
   baseUrl?: string;
   configured?: boolean;
   error?: string;
+  vision?: boolean;
+  image_mode?: 'vision' | 'ocr' | 'none';
 }
 
 export interface DocumentItem {
@@ -133,6 +135,7 @@ export interface ProviderModelOption {
   maxTokens: number;
   inputPrice: number;
   outputPrice: number;
+  vision?: boolean;
 }
 
 export interface ProviderOption {

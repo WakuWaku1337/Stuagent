@@ -10,6 +10,7 @@ export interface ProviderModel {
   inputPrice: number;
   outputPrice: number;
   maxTokensField?: 'max_tokens' | 'max_completion_tokens';
+  vision?: boolean;
 }
 
 export interface ProviderDef {
@@ -32,8 +33,22 @@ function model(
   outputPrice = 0,
   reasoning = false,
   maxTokensField: ProviderModel['maxTokensField'] = 'max_tokens',
+  vision?: boolean,
 ): ProviderModel {
-  return { id, name, reasoning, contextWindow, maxTokens, inputPrice, outputPrice, maxTokensField };
+  return { id, name, reasoning, contextWindow, maxTokens, inputPrice, outputPrice, maxTokensField, vision };
+}
+
+const VISION_ID_PATTERN =
+  /(gpt-4o|gpt-4\.1|gpt-4-vision|gemini|claude|qwen.*vl|qwen3\.8-flash|vision|llava|pixtral|glm-4v)/i;
+
+export function modelSupportsVision(model: ProviderModel | null | undefined): boolean {
+  if (!model) return false;
+  if (model.vision !== undefined) return model.vision;
+  return VISION_ID_PATTERN.test(model.id);
+}
+
+export function findVisionModel(providerId: string): ProviderModel | undefined {
+  return findProvider(providerId)?.models.find((item) => modelSupportsVision(item));
 }
 
 const STATIC_PROVIDERS: ProviderDef[] = [
@@ -44,10 +59,10 @@ const STATIC_PROVIDERS: ProviderDef[] = [
     baseUrl: 'https://api.openai.com/v1',
     requiresKey: true,
     models: [
-      model('gpt-4.1', 'GPT-4.1', 1_047_576, 32_768, 2, 8),
-      model('gpt-4.1-mini', 'GPT-4.1 mini', 1_047_576, 32_768, 0.4, 1.6),
-      model('gpt-4o', 'GPT-4o', 128_000, 16_384, 2.5, 10),
-      model('gpt-4o-mini', 'GPT-4o mini', 128_000, 16_384, 0.15, 0.6),
+      model('gpt-4.1', 'GPT-4.1', 1_047_576, 32_768, 2, 8, false, 'max_tokens', true),
+      model('gpt-4.1-mini', 'GPT-4.1 mini', 1_047_576, 32_768, 0.4, 1.6, false, 'max_tokens', true),
+      model('gpt-4o', 'GPT-4o', 128_000, 16_384, 2.5, 10, false, 'max_tokens', true),
+      model('gpt-4o-mini', 'GPT-4o mini', 128_000, 16_384, 0.15, 0.6, false, 'max_tokens', true),
       model('o3-mini', 'o3-mini', 200_000, 100_000, 1.1, 4.4, true, 'max_completion_tokens'),
       model('o4-mini', 'o4-mini', 200_000, 100_000, 1.1, 4.4, true, 'max_completion_tokens'),
     ],
@@ -59,9 +74,9 @@ const STATIC_PROVIDERS: ProviderDef[] = [
     baseUrl: 'https://api.anthropic.com/v1',
     requiresKey: true,
     models: [
-      model('claude-sonnet-4-5', 'Claude Sonnet 4.5', 200_000, 64_000, 3, 15, true),
-      model('claude-haiku-4-5', 'Claude Haiku 4.5', 200_000, 32_000, 0.8, 4, true),
-      model('claude-opus-4-1', 'Claude Opus 4.1', 200_000, 32_000, 15, 75, true),
+      model('claude-sonnet-4-5', 'Claude Sonnet 4.5', 200_000, 64_000, 3, 15, true, 'max_tokens', true),
+      model('claude-haiku-4-5', 'Claude Haiku 4.5', 200_000, 32_000, 0.8, 4, true, 'max_tokens', true),
+      model('claude-opus-4-1', 'Claude Opus 4.1', 200_000, 32_000, 15, 75, true, 'max_tokens', true),
     ],
   },
   {
@@ -71,8 +86,8 @@ const STATIC_PROVIDERS: ProviderDef[] = [
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     requiresKey: true,
     models: [
-      model('gemini-2.5-pro', 'Gemini 2.5 Pro', 1_048_576, 65_536, 1.25, 10, true),
-      model('gemini-2.5-flash', 'Gemini 2.5 Flash', 1_048_576, 65_536, 0.3, 2.5, true),
+      model('gemini-2.5-pro', 'Gemini 2.5 Pro', 1_048_576, 65_536, 1.25, 10, true, 'max_tokens', true),
+      model('gemini-2.5-flash', 'Gemini 2.5 Flash', 1_048_576, 65_536, 0.3, 2.5, true, 'max_tokens', true),
     ],
   },
   {
@@ -96,6 +111,8 @@ const STATIC_PROVIDERS: ProviderDef[] = [
       model('qwen3-max', 'Qwen3 Max', 262_144, 32_768, 1.2, 6, true),
       model('qwen-plus', 'Qwen Plus', 131_072, 16_384, 0.4, 1.2),
       model('qwen3-coder-plus', 'Qwen3 Coder Plus', 1_000_000, 65_536, 1, 5),
+      model('qwen-vl-plus', 'Qwen-VL Plus', 131_072, 8_192, 0.8, 2, false, 'max_tokens', true),
+      model('qwen-vl-max', 'Qwen-VL Max', 131_072, 8_192, 3, 9, false, 'max_tokens', true),
     ],
   },
   {
@@ -129,6 +146,8 @@ export function envProvider(): ProviderDef | null {
   const baseUrl = process.env.LLM_BASE_URL;
   const modelId = process.env.LLM_MODEL;
   if (!baseUrl || !modelId) return null;
+  const visionEnv = process.env.LLM_VISION;
+  const vision = visionEnv === '1' ? true : visionEnv === '0' ? false : undefined;
   return {
     id: 'env',
     name: '环境变量（当前 MaaS）',
@@ -137,7 +156,7 @@ export function envProvider(): ProviderDef | null {
     requiresKey: true,
     env: true,
     note: '来自 server/.env 的 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY，密钥不会在界面中显示。',
-    models: [model(modelId, modelId, 131_072, 8_192)],
+    models: [model(modelId, modelId, 131_072, 8_192, 0, 0, false, 'max_tokens', vision)],
   };
 }
 

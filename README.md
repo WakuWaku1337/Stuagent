@@ -40,7 +40,9 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 |---|---|---|
 | GET | /health | 健康检查 |
 | GET | /api/model | 当前模型与配置状态 |
-| POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/route/delta/citations/done/error）；无 conversationId 时自动建会话 |
+| POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/media/route/delta/citations/done/error）；支持 `mediaIds` 图片输入；无 conversationId 时自动建会话 |
+| POST | /api/media/upload | 上传图片（multipart `file`，最多 4 张、单张 ≤8MB，仅 JPG/PNG/WebP） |
+| GET | /api/media/:id | 读取图片（immutable 缓存、nosniff） |
 | GET/POST | /api/conversations | 历史会话列表（`q` 搜索、`limit/offset` 分页）/ 新建会话 |
 | GET/PUT/DELETE | /api/conversations/:id | 会话详情与消息（`limit/before` 分页）/ 重命名与置顶 / 删除 |
 | GET | /api/conversations/:id/messages | 消息分页（`limit`、`before` 游标） |
@@ -71,19 +73,22 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET | /api/usage/summary · /api/usage/daily · /api/usage/cost | 用量汇总 / 每日明细 / 成本 |
 | GET | /api/usage/export?format=csv|json | 导出用量明细 |
 
-页面：`/` 首页、`/chat` 对话（历史会话侧栏、重开续聊、引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件、`/settings` 模型设置、`/usage` 用量统计。
+页面：`/` 首页、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件、`/settings` 模型设置、`/usage` 用量统计。
 
 技术栈前端：Vue3 + Vite + Element Plus + ECharts（按需加载），统一水墨蓝主题与移动端抽屉导航。
 
 安全：对话接口内置注入拦截、手机号/身份证/银行卡/邮箱脱敏、密钥过滤，流式输出同样生效。
 
+图片：前端压缩到最长边 1600px（JPEG 0.85）后上传，文件存于 `server/uploads/media`；视觉模型直接读图；非视觉模型自动用同 Provider 的视觉模型做 OCR（可用 `LLM_OCR_MODEL` 指定 OCR 模型），`LLM_VISION=0/1` 可覆盖视觉能力判断。图片消息与 OCR 文本随会话持久化，重开可续聊。
+
 ## 质量校验
 
 ```bash
 cd server
-node --import jiti/register scripts/regression.ts   # 全流程回归（28 项）
+node --import jiti/register scripts/regression.ts   # 全流程回归（32 项）
 node --import jiti/register scripts/eval-rag.ts     # RAG 评测（Hit@K / MRR / 延迟）
 node --import jiti/register scripts/check-security.ts  # 安全策略单测
+node --import jiti/register scripts/check-vision.ts # 图片问答端到端（上传→读图/OCR→作答）
 ```
 
 ## 生产构建

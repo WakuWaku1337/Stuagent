@@ -15,7 +15,7 @@ import { createCoursewareTool } from './courseware/tool.ts';
 import { profileContext } from './learning/memory.ts';
 import { redactPII } from './security/guard.ts';
 import { AGENTS, type AgentId } from './agents/roles.ts';
-import { findProvider, modelOrDefault, type ReasoningLevel } from './settings/providers.ts';
+import { findProvider, modelOrDefault, modelSupportsVision, type ReasoningLevel } from './settings/providers.ts';
 import {
   getScenarioParams,
   getSettings,
@@ -40,10 +40,17 @@ export interface ChatEvent {
   citations?: Citation[];
 }
 
+export interface ChatImage {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
 export interface ChatHistoryItem {
   role: 'user' | 'assistant';
   content: string;
   created_at: number;
+  images?: ChatImage[];
 }
 
 interface Candidate {
@@ -77,7 +84,7 @@ function buildModelEntry(modelId: string) {
       id: model.id,
       name: model.name,
       reasoning: model.reasoning,
-      input: ['text'],
+      input: modelSupportsVision(model) ? ['text', 'image'] : ['text'],
       contextWindow: Math.min(settings.contextLength || model.contextWindow, model.contextWindow),
       maxTokens: Math.min(params.maxTokens, model.maxTokens),
       cost: {
@@ -166,9 +173,16 @@ function replaySession(agentId: AgentId, candidate: Candidate, history: ChatHist
     const clipped =
       item.content.length > 8000 ? `${item.content.slice(0, 8000)}…` : item.content;
     const content = item.role === 'user' ? redactPII(clipped).text : clipped;
-    if (!content.trim()) continue;
+    if (!content.trim() && !item.images?.length) continue;
     if (item.role === 'user') {
-      manager.appendMessage({ role: 'user', content, timestamp: item.created_at });
+      const parts: ({ type: 'text'; text: string } | ChatImage)[] = [];
+      if (content.trim()) parts.push({ type: 'text', text: content });
+      if (item.images?.length) parts.push(...item.images);
+      manager.appendMessage({
+        role: 'user',
+        content: parts.length > 0 ? parts : content,
+        timestamp: item.created_at,
+      });
       continue;
     }
     manager.appendMessage({
@@ -235,6 +249,8 @@ export function dropConversationSessions(conversationId: string): void {
 export async function getModelInfo() {
   const settings = getSettings();
   const provider = findProvider(settings.provider);
+  const model = modelOrDefault(settings.provider, settings.model);
+  const vision = modelSupportsVision(model);
   let keyCount = 0;
   let configured = false;
   try {
@@ -253,6 +269,12 @@ export async function getModelInfo() {
     keyCount,
     configured,
     env: Boolean(provider?.env),
+    vision,
+    image_mode: vision
+      ? 'vision'
+      : process.env.LLM_OCR_MODEL || provider?.models.some((item) => modelSupportsVision(item))
+        ? 'ocr'
+        : 'none',
   };
 }
 
@@ -286,7 +308,7 @@ export async function chat(
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
   agentId: AgentId = 'tutor',
-  options: { reasoning?: ReasoningLevel; history?: ChatHistoryItem[] } = {},
+  options: { reasoning?: ReasoningLevel; history?: ChatHistoryItem[]; images?: ChatImage[] } = {},
 ): Promise<string> {
   const settings = getSettings();
   const provider = findProvider(settings.provider);
@@ -348,7 +370,7 @@ export async function chat(
       const abortHandler = () => session.abort();
       signal?.addEventListener('abort', abortHandler);
       try {
-        await session.prompt(promptText);
+        await session.prompt(promptText, options.images?.length ? { images: options.images } : undefined);
       } finally {
         unsubscribe();
         citationSinks.delete(sessionKey);
