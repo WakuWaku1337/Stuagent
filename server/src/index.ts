@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { chat, getModelInfo } from './pi.ts';
 import documents from './routes/documents.ts';
+import learning from './routes/learning.ts';
 import { searchKnowledge, type Citation } from './rag/service.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
@@ -31,6 +32,7 @@ app.get('/api/model', async (c) => {
 });
 
 app.route('/api/documents', documents);
+app.route('/api', learning);
 
 app.post('/api/knowledge/search', async (c) => {
   const body = await c.req.json<{ query?: string; topK?: number; subject?: string }>().catch(() => null);

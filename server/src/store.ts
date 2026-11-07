@@ -35,7 +35,94 @@ db.exec(`
     FOREIGN KEY (document_id) REFERENCES documents(document_id)
   );
   CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
+
+  CREATE TABLE IF NOT EXISTS learners (
+    learner_id TEXT PRIMARY KEY,
+    name TEXT,
+    grade TEXT,
+    subjects TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS memories (
+    memory_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_memories_learner ON memories(learner_id);
+
+  CREATE TABLE IF NOT EXISTS questions (
+    question_id TEXT PRIMARY KEY,
+    bank_id TEXT NOT NULL,
+    subject TEXT,
+    knowledge_point TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    content TEXT NOT NULL,
+    options TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    explanation TEXT,
+    source TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_questions_bank ON questions(bank_id);
+
+  CREATE TABLE IF NOT EXISTS wrong_records (
+    record_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    question_snapshot TEXT NOT NULL,
+    student_answer TEXT,
+    reason TEXT,
+    review_count INTEGER NOT NULL DEFAULT 0,
+    ease REAL NOT NULL DEFAULT 2.5,
+    interval_days INTEGER NOT NULL DEFAULT 0,
+    next_review INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_review INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_wrong_due ON wrong_records(learner_id, next_review);
+
+  CREATE TABLE IF NOT EXISTS mastery (
+    learner_id TEXT NOT NULL,
+    knowledge_point TEXT NOT NULL,
+    probability REAL NOT NULL,
+    correct_count INTEGER NOT NULL DEFAULT 0,
+    wrong_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (learner_id, knowledge_point)
+  );
+
+  CREATE TABLE IF NOT EXISTS quiz_sessions (
+    session_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT,
+    subject TEXT,
+    total INTEGER NOT NULL DEFAULT 0,
+    score REAL,
+    duration_min INTEGER,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    question_ids TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS quiz_answers (
+    answer_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    student_answer TEXT,
+    is_correct INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_answers_session ON quiz_answers(session_id);
 `);
+
+const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];
+if (!sessionCols.some((c) => c.name === 'question_ids')) {
+  db.exec('ALTER TABLE quiz_sessions ADD COLUMN question_ids TEXT');
+}
 
 export interface DocumentRow {
   document_id: string;

@@ -10,6 +10,8 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { createKnowledgeTool } from './rag/tool.ts';
 import type { Citation } from './rag/service.ts';
+import { createLearningTools } from './learning/tools.ts';
+import { profileContext } from './learning/memory.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const agentDir = join(serverRoot, 'data', 'pi-agent');
@@ -94,8 +96,19 @@ async function getSession(sessionId: string): Promise<AgentSession> {
     modelRuntime: runtime,
     model,
     thinkingLevel: 'off',
-    tools: ['knowledge_search'],
-    customTools: [createKnowledgeTool((citations) => citationSinks.get(sessionId)?.(citations))],
+    tools: [
+      'knowledge_search',
+      'memory_write',
+      'memory_recall',
+      'wrongbook_add',
+      'wrongbook_due',
+      'mastery_update',
+      'quiz_generate',
+    ],
+    customTools: [
+      createKnowledgeTool((citations) => citationSinks.get(sessionId)?.(citations)),
+      ...createLearningTools(),
+    ],
     sessionManager: SessionManager.inMemory(),
   });
   sessions.set(sessionId, session);
@@ -141,8 +154,10 @@ export async function chat(
 
   const abortHandler = () => session.abort();
   signal?.addEventListener('abort', abortHandler);
+  const profile = profileContext();
+  const promptText = profile ? `【学习者画像】\n${profile}\n\n【学生输入】\n${message}` : message;
   try {
-    await session.prompt(message);
+    await session.prompt(promptText);
   } finally {
     unsubscribe();
     citationSinks.delete(sessionId);

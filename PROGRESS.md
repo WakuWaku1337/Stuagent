@@ -1,39 +1,43 @@
 # 智学 实施进度
 
-当前阶段：C RAG 知识库 —— 已完成（S05、S06、S07 验收通过）
-已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C，2026-11-07 本次）
-下一步对话（编号+目标）：S08 记忆画像 —— SQLite 表、memory 工具、钩子注入、wrongbook.add；验收：画像可跨会话读取
+当前阶段：D 记忆错题 + E 出题模考 BKT —— 已完成（S08–S12 验收通过）
+已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C）；S08–S12（D+E 并行，2026-11-07 本次）
+下一步对话（编号+目标）：S13 子智能体 —— Tutor/Quizzer/Analyst/Solver 封装、提示词与路由；验收：任务可正确分派
 
 关键文件/接口：
-- server/src/documents/parsers.ts：PDF（pdfjs-dist 逐页+页码）、DOCX（mammoth 标题层级）、DOC（word-extractor）、TXT（UTF-8/GBK 自动识别）、MD（标题栈）
-- server/src/documents/chunker.ts：语义优先切片，800 字上限、80 字重叠、超长段落窗口切分
-- server/src/documents/service.ts + routes/documents.ts：POST/GET/DELETE /api/documents、reparse、index；错误码符合设计 6.8.6（409/413/415/422 等），多文件 207 部分成功
-- server/src/store.ts：node:sqlite（Node 24 内置）documents/chunks 表，data/edu.db
-- server/src/rag/embedding.ts：text-embedding-v4（1024 维，阿里云百炼 OpenAI 兼容端点）
-- server/src/rag/rerank.ts：gte-rerank-v2 Cross-Encoder（workspace 端点）
-- server/src/rag/milvus.ts：edu_chunks 集合；dense HNSW(COSINE,M16,efC200)+sparse BM25 Function(jieba+cnalphanumonly)；混合召回 + RRFRanker(k=60)
-- server/src/rag/service.ts：indexDocument / searchKnowledge（Top50 召回 → RRF → 精排 Top5 → 引用）
-- server/src/rag/tool.ts：Pi 自定义工具 knowledge_search（学科过滤空结果自动回退全库）
-- POST /api/knowledge/search：检索调试接口
-- web/src/views/DocumentsView.vue：资料库上传/状态/重新灌库/删除；web/src/views/ChatView.vue：回复内引用卡片
+- server/src/store.ts：新增 learners / memories / questions / wrong_records / mastery / quiz_sessions / quiz_answers 表（node:sqlite，data/edu.db）
+- server/src/learning/bkt.ts：标准 BKT（P(L0)=0.3, P(T)=0.1, P(S)=0.1, P(G)=0.2，阈值 0.95）
+- server/src/learning/memory.ts：记忆读写/检索 + profileContext()（画像、薄弱点、记忆）
+- server/src/learning/wrongbook.ts：错题收录 + SM-2 简化调度（quality 0-5，next_review）
+- server/src/learning/questions.ts：题目/题库存取、随机抽题
+- server/src/learning/quiz.ts：LLM 出题（单选）、题库提取、开卷/模考会话、判分、BKT 更新、错题联动
+- server/src/learning/tools.ts：Pi 工具 memory_write / memory_recall / wrongbook_add / wrongbook_due / mastery_update / quiz_generate
+- server/src/routes/learning.ts：/api/memory、/api/wrongbook、/api/mastery、/api/quiz/generate|answer|sessions、/api/bank、/api/bank/extract、/api/exam/start|:id|submit
+- server/src/pi.ts：每轮对话注入画像（等价 before_agent_start），工具白名单含知识检索 + 6 个学习工具
+- web/src/views：QuizView（出题答题）、WrongbookView（错题/复习）、MasteryView（ECharts）、ExamView（计时模考）；首页六个入口
 
 验收证据（2026-11-07 实测）：
-- S05：math-notes.md → 7 切片（章节路径三级正确）；geometry.txt → 1 切片；chemistry.pdf → 2 切片（page=1）；docx 样卷 → 13 切片；重复上传 409 DOCUMENT_EXISTS；PDF 解析修复后 reparse 正常
-- S06：edu_chunks 建集合成功（BM25 Function + HNSW 索引，local 存储模式可用）；3 文档 10 切片全部 indexed；searchKnowledge 返回带 chunk_id/章节/页码/精排分
-- S07：查询"勾股定理的三边关系"→ geometry.txt 精排 0.477 居首；非流式对话返回 5 条引用（含 chunk_id、页码）；浏览器 /chat 实测回复含 [1] 标注、8 条来源卡片、9 个 KaTeX 公式；/documents 页显示 3 份资料"已入库"；web 构建通过
+- S08：记忆写入 API；对话中 agent 主动调用 memory_write 写入 3 条（目标/薄弱点）；**新会话** mem-b 未被告知即可回答"立体几何/空间向量最薄弱"（画像跨会话注入生效）；重启后 memories=3 仍在
+- S09：答错自动收录（wrong_record_id 返回）；浏览器错题本 3 条 → 点"记住了"提示 1 天后再见，next_review/interval 更新；due 计数正常；重启后 wrong_records=3
+- S10：/api/quiz/generate 生成 2 道勾股定理单选（A-D）；浏览器 /quiz 生成 3 题、答题后即时反馈"回答正确 + 掌握度 69.3% + 解析"
+- S11：/api/bank/extract 从 math-notes.md 提取 7 题；浏览器 /exam 3 题倒计时 09:58 → 交卷 66.7 分，失分分布按知识点展示，错题卡片红标
+- S12：BKT 实测 0.3 → 答对 0.6927 → 答错 0.2978；/mastery 返回 percent/mastered；浏览器掌握度页 ECharts canvas 渲染 + 薄弱点列表（勾股定理 49%）
+- 对话工具闭环：用户口述错题 → agent 调 wrongbook_add → 错题本 3→4 条，题干/答案/错因正确
+- 全部重启后数据仍在（SQLite 持久化）
 
 启动方式：
-- npm run milvus:up；npm run dev；浏览器 http://localhost:5173/documents 上传资料 → http://localhost:5173/chat 提问
+- npm run milvus:up（RAG 需要）；npm run dev
+- 页面：/chat 对话、/documents 资料库、/quiz 出题、/wrongbook 错题本、/mastery 掌握度、/exam 模考
 
 关键决策与偏离（需评审知悉）：
-1. Embedding/Reranker 改用阿里云百炼（text-embedding-v4 1024 维 + gte-rerank-v2），替代设计中的 BGE-M3/BGE-reranker 本地部署；接口同为三段式管线（混合召回→RRF→Cross-Encoder），维度 1024 与设计一致。
-2. Milvus 仍为 local 存储（阶段 A 决策），BM25 Function/HNSW 已实测可用。
-3. 切片尺寸：按章节语义切分，短小节保持 100-200 字整片（不强行凑 500 字），超长段落 800 字上限+80 重叠。
-4. SDK 细节：字段用 `name`、Function 用 `type`、flush 用 `collection_names`（与设计文档示例的 field_name/function_type 不同，已按实际 SDK 修正）。
-5. Pi 工具：knowledge_search 注册于 createAgentSession.customTools；引用通过 SSE citations 事件推送到前端。
+1. 掌握度按知识点存储（设计 ER 图中 MASTERY 以 question_id 关联；BKT 本质按知识点追踪，故主键为 (learner_id, knowledge_point)，并保留对/错计数）。
+2. 画像注入：在 chat() 每轮将 profileContext（学生信息 + 前5薄弱点 + 近10条记忆）拼到用户输入前，等价于 before_agent_start 注入；未启用 Pi 扩展运行时。
+3. 出题/题库提取用 LLM（同一 qwen 端点）生成单选（A-D），判分确定性，便于 BKT 与错题联动；题库提取从文档切片生成（无 OCR）。
+4. SM-2 采用简化版：quality≥3 间隔乘 ease，否则 1 天；ease 范围 1.3–3.0。
+5. 模考会话题目 ID 持久化在 quiz_sessions.question_ids，重启后可恢复。
 6. setup-matt-pocock-skills 技能本会话不可用，未使用。
 
 遗留问题与风险：
-- 引用卡片会累积模型多次检索的候选（可能包含低相关项），后续可只保留模型实际引用的编号
-- 同一文档重新灌库为"先删后插"；大规模数据需改增量方案
-- S08 需要 SQLite 记忆表与钩子注入；Pi 钩子（before_agent_start/turn_end）尚未接入
+- 模考未做"考试记录列表"页面（当前只展示本次结果）；设计中的 EXAM_PAPER 系列表属阶段 G 的考试复盘，本阶段用 quiz_sessions 承载模考
+- 出题质量依赖模型输出 JSON 稳定性，已做容错解析
+- S13 子智能体：需要把当前单 Tutor + 工具模式扩展为四角色路由

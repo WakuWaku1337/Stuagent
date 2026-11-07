@@ -45,5 +45,12 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET/DELETE | /api/documents/:id | 文档详情与切片 / 删除（含向量） |
 | POST | /api/documents/:id/reparse / index | 重新解析 / 重新灌库 |
 | POST | /api/knowledge/search | 混合检索 + 精排 + 引用 |
+| GET/POST | /api/memory | 长期记忆列表 / 写入 |
+| GET | /api/wrongbook | 错题列表（`?due=1` 只看待复习） |
+| POST | /api/wrongbook/:id/review | SM-2 复习（quality 0-5） |
+| GET | /api/mastery | BKT 掌握度 |
+| POST | /api/quiz/generate · /api/quiz/answer | 出题 / 答题判分 |
+| POST | /api/bank/extract | 从资料提取题库 |
+| POST | /api/exam/start · /api/exam/:id/submit | 模考开始 / 交卷分析 |
 
-页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX）、`/documents` 资料库。
+页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考。

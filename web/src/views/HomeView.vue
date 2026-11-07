@@ -32,6 +32,14 @@ onMounted(async () => {
       <router-link to="/chat" style="color: #2563eb">进入对话页 →</router-link>
       &nbsp;&nbsp;
       <router-link to="/documents" style="color: #2563eb">资料库 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/quiz" style="color: #2563eb">智能出题 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/wrongbook" style="color: #2563eb">错题本 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/mastery" style="color: #2563eb">掌握度 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/exam" style="color: #2563eb">模拟考试 →</router-link>
     </p>
   </main>
 </template>
