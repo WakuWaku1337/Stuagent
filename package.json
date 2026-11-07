@@ -1,0 +1,22 @@
+{
+  "name": "edu-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "智学 Agent（EduPi）：本地优先的高中学习智能体",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "build": "npm run build --workspace web",
+    "milvus:up": "docker compose -f docker/docker-compose.yml up -d",
+    "milvus:down": "docker compose -f docker/docker-compose.yml down",
+    "milvus:health": "curl -sf http://localhost:9091/healthz"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
