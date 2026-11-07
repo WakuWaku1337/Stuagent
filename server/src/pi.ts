@@ -12,10 +12,11 @@ import { createKnowledgeTool } from './rag/tool.ts';
 import type { Citation } from './rag/service.ts';
 import { createLearningTools } from './learning/tools.ts';
 import { profileContext } from './learning/memory.ts';
+import { AGENTS, type AgentId } from './agents/roles.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const agentDir = join(serverRoot, 'data', 'pi-agent');
-const workspaceDir = join(serverRoot, 'agent-workspace');
+const workspaceRoot = join(serverRoot, 'agent-workspace');
 
 export interface ChatEvent {
   type: 'delta' | 'done' | 'error' | 'citations';
@@ -85,33 +86,27 @@ async function getRuntime() {
 const sessions = new Map<string, AgentSession>();
 const citationSinks = new Map<string, (c: Citation[]) => void>();
 
-async function getSession(sessionId: string): Promise<AgentSession> {
-  const existing = sessions.get(sessionId);
+async function getSession(sessionId: string, agentId: AgentId): Promise<AgentSession> {
+  const key = `${agentId}:${sessionId}`;
+  const existing = sessions.get(key);
   if (existing) return existing;
   const { runtime } = await getRuntime();
   const model = new ModelRegistry(runtime).find('edupi', process.env.LLM_MODEL!)!;
+  const meta = AGENTS[agentId];
   const { session } = await createAgentSession({
-    cwd: workspaceDir,
+    cwd: join(workspaceRoot, 'roles', agentId),
     agentDir,
     modelRuntime: runtime,
     model,
     thinkingLevel: 'off',
-    tools: [
-      'knowledge_search',
-      'memory_write',
-      'memory_recall',
-      'wrongbook_add',
-      'wrongbook_due',
-      'mastery_update',
-      'quiz_generate',
-    ],
+    tools: meta.tools,
     customTools: [
-      createKnowledgeTool((citations) => citationSinks.get(sessionId)?.(citations)),
+      createKnowledgeTool((citations) => citationSinks.get(key)?.(citations)),
       ...createLearningTools(),
     ],
     sessionManager: SessionManager.inMemory(),
   });
-  sessions.set(sessionId, session);
+  sessions.set(key, session);
   return session;
 }
 
@@ -132,13 +127,15 @@ export async function chat(
   message: string,
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
+  agentId: AgentId = 'tutor',
 ): Promise<string> {
-  const session = await getSession(sessionId);
+  const session = await getSession(sessionId, agentId);
+  const sinkKey = `${agentId}:${sessionId}`;
   let fullText = '';
   let errorMessage = '';
 
   const sink = (citations: Citation[]) => onEvent({ type: 'citations', citations });
-  citationSinks.set(sessionId, sink);
+  citationSinks.set(sinkKey, sink);
 
   const unsubscribe = session.subscribe((event) => {
     if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
@@ -160,7 +157,7 @@ export async function chat(
     await session.prompt(promptText);
   } finally {
     unsubscribe();
-    citationSinks.delete(sessionId);
+    citationSinks.delete(sinkKey);
     signal?.removeEventListener('abort', abortHandler);
   }
 

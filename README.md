@@ -52,5 +52,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/quiz/generate · /api/quiz/answer | 出题 / 答题判分 |
 | POST | /api/bank/extract | 从资料提取题库 |
 | POST | /api/exam/start · /api/exam/:id/submit | 模考开始 / 交卷分析 |
+| GET | /api/agents | 子智能体列表（Tutor/Quizzer/Analyst/Solver） |
+| POST | /api/tasks · GET /api/tasks/:id | 后台任务（quiz/analysis），202 入队；WS `/ws` 推送进度 |
 
-页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考。
+页面：`/` 首页、`/chat` 对话（引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务。

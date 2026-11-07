@@ -1,43 +1,36 @@
 # 智学 实施进度
 
-当前阶段：D 记忆错题 + E 出题模考 BKT —— 已完成（S08–S12 验收通过）
-已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C）；S08–S12（D+E 并行，2026-11-07 本次）
-下一步对话（编号+目标）：S13 子智能体 —— Tutor/Quizzer/Analyst/Solver 封装、提示词与路由；验收：任务可正确分派
+当前阶段：F 子智能体与双层编排 —— 已完成（S13、S14 验收通过）
+已完成对话：S01–S02（A）；S03–S04（B）；S05–S07（C）；S08–S12（D+E）；S13–S14（F，2026-11-07 本次）
+下一步对话（编号+目标）：S15 整卷识别 —— OCR / 多模态 exam.recognize，整卷结构化；验收：整卷可结构化
 
 关键文件/接口：
-- server/src/store.ts：新增 learners / memories / questions / wrong_records / mastery / quiz_sessions / quiz_answers 表（node:sqlite，data/edu.db）
-- server/src/learning/bkt.ts：标准 BKT（P(L0)=0.3, P(T)=0.1, P(S)=0.1, P(G)=0.2，阈值 0.95）
-- server/src/learning/memory.ts：记忆读写/检索 + profileContext()（画像、薄弱点、记忆）
-- server/src/learning/wrongbook.ts：错题收录 + SM-2 简化调度（quality 0-5，next_review）
-- server/src/learning/questions.ts：题目/题库存取、随机抽题
-- server/src/learning/quiz.ts：LLM 出题（单选）、题库提取、开卷/模考会话、判分、BKT 更新、错题联动
-- server/src/learning/tools.ts：Pi 工具 memory_write / memory_recall / wrongbook_add / wrongbook_due / mastery_update / quiz_generate
-- server/src/routes/learning.ts：/api/memory、/api/wrongbook、/api/mastery、/api/quiz/generate|answer|sessions、/api/bank、/api/bank/extract、/api/exam/start|:id|submit
-- server/src/pi.ts：每轮对话注入画像（等价 before_agent_start），工具白名单含知识检索 + 6 个学习工具
-- web/src/views：QuizView（出题答题）、WrongbookView（错题/复习）、MasteryView（ECharts）、ExamView（计时模考）；首页六个入口
+- server/src/agents/roles.ts：Tutor/Quizzer/Analyst/Solver 元数据（名称、职责、工具白名单）
+- server/src/agents/router.ts：路由器，规则打分优先 + LLM 分类兜底（失败回退 Tutor）
+- server/agent-workspace/roles/{tutor,quizzer,analyst,solver}/AGENTS.md：四角色系统提示词（Pi 按 cwd 加载）
+- server/src/pi.ts：会话按 `角色:会话ID` 隔离，cwd 指向角色目录，工具白名单按角色下发
+- server/src/learning/tools.ts：新增 mastery_report 工具（Analyst/Quizzer 用）
+- server/src/tasks/queue.ts：SQLite 任务表 + 单 Worker 后台队列 + 看门狗超时 + 启动恢复（queued/running → 重排，attempts 上限 3）
+- server/src/index.ts：GET /api/agents、/api/chat 支持 agent=auto|tutor|quizzer|analyst|solver（SSE 先发 route 事件）、/api/tasks（创建/列表/详情/取消）、WS /ws 推送任务事件
+- web/src/views/TasksView.vue：后台任务页（创建、状态、WS 实时事件）；对话页气泡显示角色徽标
 
 验收证据（2026-11-07 实测）：
-- S08：记忆写入 API；对话中 agent 主动调用 memory_write 写入 3 条（目标/薄弱点）；**新会话** mem-b 未被告知即可回答"立体几何/空间向量最薄弱"（画像跨会话注入生效）；重启后 memories=3 仍在
-- S09：答错自动收录（wrong_record_id 返回）；浏览器错题本 3 条 → 点"记住了"提示 1 天后再见，next_review/interval 更新；due 计数正常；重启后 wrong_records=3
-- S10：/api/quiz/generate 生成 2 道勾股定理单选（A-D）；浏览器 /quiz 生成 3 题、答题后即时反馈"回答正确 + 掌握度 69.3% + 解析"
-- S11：/api/bank/extract 从 math-notes.md 提取 7 题；浏览器 /exam 3 题倒计时 09:58 → 交卷 66.7 分，失分分布按知识点展示，错题卡片红标
-- S12：BKT 实测 0.3 → 答对 0.6927 → 答错 0.2978；/mastery 返回 percent/mastered；浏览器掌握度页 ECharts canvas 渲染 + 薄弱点列表（勾股定理 49%）
-- 对话工具闭环：用户口述错题 → agent 调 wrongbook_add → 错题本 3→4 条，题干/答案/错因正确
-- 全部重启后数据仍在（SQLite 持久化）
-
-启动方式：
-- npm run milvus:up（RAG 需要）；npm run dev
-- 页面：/chat 对话、/documents 资料库、/quiz 出题、/wrongbook 错题本、/mastery 掌握度、/exam 模考
+- S13：四条输入分别路由到 tutor/quizzer/analyst/solver（规则命中理由可见）；回复具角色特征（出题=2 道单选、诊断=结构化报告、解题=证明+验算）；浏览器对话页气泡显示"Quizzer 出题"，且出题前查询掌握度选择 15% 的薄弱点
+- S14 不阻塞：POST /api/tasks 1s 返回 202（queued）；任务执行期间 /api/chat 正常返回（14s），任务稍后 done 并返回 session_id
+- S14 WebSocket：浏览器 /tasks 连接建立（connected/pong），任务 done 事件推送后列表自动刷新为"完成"
+- S14 可续任务：向 DB 注入一条 status=running 的中断任务 → 重启服务 → attempts=1 自动重排 → 执行完成（done + session_id）
+- S14 看门狗：TASK_TIMEOUT_MS=2000 启动，任务 2s 后被标记 status=timeout，error="超过 2000ms 未完成"
+- S14 分析类任务：background analysis 输出诊断报告（Analyst 角色）
 
 关键决策与偏离（需评审知悉）：
-1. 掌握度按知识点存储（设计 ER 图中 MASTERY 以 question_id 关联；BKT 本质按知识点追踪，故主键为 (learner_id, knowledge_point)，并保留对/错计数）。
-2. 画像注入：在 chat() 每轮将 profileContext（学生信息 + 前5薄弱点 + 近10条记忆）拼到用户输入前，等价于 before_agent_start 注入；未启用 Pi 扩展运行时。
-3. 出题/题库提取用 LLM（同一 qwen 端点）生成单选（A-D），判分确定性，便于 BKT 与错题联动；题库提取从文档切片生成（无 OCR）。
-4. SM-2 采用简化版：quality≥3 间隔乘 ease，否则 1 天；ease 范围 1.3–3.0。
-5. 模考会话题目 ID 持久化在 quiz_sessions.question_ids，重启后可恢复。
+1. 路由器采用"关键词规则打分 + LLM 分类兜底"，非完整事件总线；符合设计 5.5.4 对单用户场景的裁剪。
+2. 可续任务以"任务行持久化 + 重启重排"实现；Pi 子会话本身仍为 inMemory，重启后角色对话上下文不保留（任务结果保留）。设计中的 append-only 可回放会话日志属 P2。
+3. Worker 串行处理后台任务（单用户足够）；看门狗为进程内定时器，非外部监工进程。
+4. 角色切换按单条消息路由，各角色会话历史独立；跨角色共享的是画像/记忆/掌握度（SQLite），不是对话上下文。
+5. WebSocket 使用 @hono/node-ws；Vite 已配置 /ws 代理。
 6. setup-matt-pocock-skills 技能本会话不可用，未使用。
 
 遗留问题与风险：
-- 模考未做"考试记录列表"页面（当前只展示本次结果）；设计中的 EXAM_PAPER 系列表属阶段 G 的考试复盘，本阶段用 quiz_sessions 承载模考
-- 出题质量依赖模型输出 JSON 稳定性，已做容错解析
-- S13 子智能体：需要把当前单 Tutor + 工具模式扩展为四角色路由
+- 同一会话跨角色时上下文不连续（设计上 Tutor 可转交，后续可由 Router 汇总）
+- 后台任务失败只记录 error，未做重试策略（除恢复时的 attempts）
+- S15 需要 OCR/多模态通道；当前只有文本模型，需确认拍照识别方案（可用多模态模型或 OCR MCP）

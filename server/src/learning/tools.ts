@@ -162,5 +162,26 @@ export function createLearningTools() {
     },
   });
 
-  return [memoryWrite, memoryRecall, wrongbookAdd, masteryUpdate, quizGenerate, dueWrong];
+  const masteryReport = defineTool({
+    name: 'mastery_report',
+    label: '掌握度报告',
+    description: '读取各知识点 BKT 掌握度、对错次数与薄弱排序，用于诊断分析。',
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number({ description: '返回条数，默认 10' })),
+    }),
+    async execute(_id, params) {
+      const rows = listMastery(DEFAULT_LEARNER).slice(0, params.limit ?? 10);
+      const text = rows.length
+        ? rows
+            .map(
+              (r) =>
+                `- ${r.knowledge_point}：${(r.probability * 100).toFixed(1)}%（对 ${r.correct_count} / 错 ${r.wrong_count}）`,
+            )
+            .join('\n')
+        : '暂无掌握度数据。';
+      return { content: [{ type: 'text' as const, text }], details: { rows } };
+    },
+  });
+
+  return [memoryWrite, memoryRecall, wrongbookAdd, masteryUpdate, quizGenerate, dueWrong, masteryReport];
 }

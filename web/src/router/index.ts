@@ -6,6 +6,7 @@ import QuizView from '../views/QuizView.vue';
 import WrongbookView from '../views/WrongbookView.vue';
 import MasteryView from '../views/MasteryView.vue';
 import ExamView from '../views/ExamView.vue';
+import TasksView from '../views/TasksView.vue';
 
 export default createRouter({
   history: createWebHistory(),
@@ -17,5 +18,6 @@ export default createRouter({
     { path: '/wrongbook', name: 'wrongbook', component: WrongbookView },
     { path: '/mastery', name: 'mastery', component: MasteryView },
     { path: '/exam', name: 'exam', component: ExamView },
+    { path: '/tasks', name: 'tasks', component: TasksView },
   ],
 });

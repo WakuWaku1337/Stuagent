@@ -10,10 +10,13 @@ export interface Citation {
 }
 
 export interface ChatStreamEvent {
-  type: 'delta' | 'done' | 'error' | 'citations';
+  type: 'delta' | 'done' | 'error' | 'citations' | 'route';
   text?: string;
   message?: string;
   citations?: Citation[];
+  agent?: string;
+  agent_name?: string;
+  reason?: string;
 }
 
 export async function streamChat(

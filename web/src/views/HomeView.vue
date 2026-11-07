@@ -40,6 +40,8 @@ onMounted(async () => {
       <router-link to="/mastery" style="color: #2563eb">掌握度 →</router-link>
       &nbsp;&nbsp;
       <router-link to="/exam" style="color: #2563eb">模拟考试 →</router-link>
+      &nbsp;&nbsp;
+      <router-link to="/tasks" style="color: #2563eb">后台任务 →</router-link>
     </p>
   </main>
 </template>

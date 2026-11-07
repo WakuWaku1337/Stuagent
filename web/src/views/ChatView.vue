@@ -42,6 +42,7 @@ watch(
         :class="m.role"
       >
         <div class="bubble" :class="m.role">
+          <div v-if="m.role === 'assistant'" class="agent-badge">{{ m.agent ?? '智学' }}</div>
           <MarkdownView v-if="m.role === 'assistant'" :text="m.content || '…'" />
           <template v-else>{{ m.content }}</template>
           <div v-if="m.citations?.length" class="citations">
@@ -135,6 +136,15 @@ watch(
 .error {
   color: #dc2626;
   text-align: center;
+}
+.agent-badge {
+  display: inline-block;
+  font-size: 11px;
+  color: #2563eb;
+  background: #eff6ff;
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-bottom: 6px;
 }
 .citations {
   margin-top: 10px;

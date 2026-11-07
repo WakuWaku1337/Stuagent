@@ -6,6 +6,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
+  agent?: string;
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -33,6 +34,7 @@ export const useChatStore = defineStore('chat', () => {
           if (event.type === 'citations' && event.citations) {
             reply.citations = [...(reply.citations ?? []), ...event.citations];
           }
+          if (event.type === 'route' && event.agent_name) reply.agent = event.agent_name;
           if (event.type === 'error') error.value = event.message ?? '对话出错';
         },
         controller.signal,
