@@ -5,10 +5,10 @@ Issues and specs for this repo live as GitHub issues in `WakuWaku1337/Stuagent`.
 ## This machine (network note)
 
 - GitHub is reachable **only through the system TLS interception** (SteamTools / Watt Toolkit). Git's bundled CA store does not trust it, so this repo has a repo-local trust setting: `http.sslCAInfo=.git/steamtools-ca.pem` (a bundle of the SteamTools root CAs, kept inside `.git/` and never committed). Do not add that setting globally.
-- `gh` (v2.103.3) can reach `api.github.com`; it only needs credentials: run `gh auth login -h github.com`, or set `GH_TOKEN`.
-- The repository is public (`WakuWaku1337/Stuagent`, default branch `main`). It was verified through `https://gh-proxy.com/https://api.github.com/repos/WakuWaku1337/Stuagent` (`private: false`) before the TLS workaround.
-- The five triage labels have **not** been created yet: that requires an authenticated `gh`. Create them once `gh` can authenticate (see `triage-labels.md`).
-- Remote `origin` points at `https://github.com/WakuWaku1337/Stuagent.git`. The remote currently has only an initial `README.md` commit; local history is unrelated to it, so pushing requires an explicit history decision (merge with `--allow-unrelated-histories` or force-push). Do not push without the user's confirmation.
+- SSH port 22 is refused; `~/.ssh/config` maps `github.com` to `ssh.github.com:443` with the project key `~/.ssh/id_ed25519_stuagent`. Push/pull over SSH works.
+- `gh` (v2.103.3) is authenticated as **WakuWaku1337** (token scopes include `repo`); `gh repo view WakuWaku1337/Stuagent` confirms `PUBLIC`, default branch `main`.
+- The five triage labels exist (see `triage-labels.md`).
+- Remote `origin` is `git@github.com:WakuWaku1337/Stuagent.git`. Local `main` was merged with the remote's initial commit (`d7f465d`) and pushed; do not force-push without the user's confirmation.
 
 ## Conventions
 

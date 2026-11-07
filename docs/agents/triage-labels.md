@@ -14,9 +14,9 @@ When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the 
 
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.
 
-## Pending setup
+## Setup status
 
-These labels have not been created on `WakuWaku1337/Stuagent` yet — label creation needs an authenticated `gh`, and this machine currently cannot reach `api.github.com` directly. Once `gh` can authenticate, create them:
+All five labels exist on `WakuWaku1337/Stuagent` as of 2026-11-07. `wontfix` was already present as a GitHub default label, so its description remains "This will not be worked on"; the other four were created to match this table. To recreate them elsewhere:
 
 ```bash
 gh label create needs-triage --color FBCA04 --description "Maintainer needs to evaluate"
