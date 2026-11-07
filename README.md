@@ -17,6 +17,7 @@
 ```bash
 npm install
 npm run milvus:up      # 启动 Milvus（19530），健康检查：npm run milvus:health
+npm run asr:model      # 首次启用语音输入：下载本地 ASR 模型（约 82MB，写入 server/models，不入库）
 npm run dev            # 并行启动 server(3000) 与 web(5173)
 ```
 
@@ -43,6 +44,10 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/media/route/delta/citations/done/error）；支持 `mediaIds` 图片输入；无 conversationId 时自动建会话 |
 | POST | /api/media/upload | 上传图片（multipart `file`，最多 4 张、单张 ≤8MB，仅 JPG/PNG/WebP） |
 | GET | /api/media/:id | 读取图片（immutable 缓存、nosniff） |
+| GET | /api/asr | 语音识别状态（模型是否就绪） |
+| POST | /api/asr | 语音转文字（multipart `audio`，16-bit PCM WAV，8k~48kHz，≤60s） |
+| GET | /api/tts | TTS 模式（浏览器 / 服务端） |
+| POST | /api/tts | 朗读文本（未配置服务端 TTS 时返回 `{mode:'browser'}`，否则返回音频） |
 | GET/POST | /api/conversations | 历史会话列表（`q` 搜索、`limit/offset` 分页）/ 新建会话 |
 | GET/PUT/DELETE | /api/conversations/:id | 会话详情与消息（`limit/before` 分页）/ 重命名与置顶 / 删除 |
 | GET | /api/conversations/:id/messages | 消息分页（`limit`、`before` 游标） |
@@ -73,7 +78,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET | /api/usage/summary · /api/usage/daily · /api/usage/cost | 用量汇总 / 每日明细 / 成本 |
 | GET | /api/usage/export?format=csv|json | 导出用量明细 |
 
-页面：`/` 首页、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件、`/settings` 模型设置、`/usage` 用量统计。
+页面：`/` 首页、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、语音输入与朗读、引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件、`/settings` 模型设置、`/usage` 用量统计。
 
 技术栈前端：Vue3 + Vite + Element Plus + ECharts（按需加载），统一水墨蓝主题与移动端抽屉导航。
 
@@ -81,14 +86,17 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 
 图片：前端压缩到最长边 1600px（JPEG 0.85）后上传，文件存于 `server/uploads/media`；视觉模型直接读图；非视觉模型自动用同 Provider 的视觉模型做 OCR（可用 `LLM_OCR_MODEL` 指定 OCR 模型），`LLM_VISION=0/1` 可覆盖视觉能力判断。图片消息与 OCR 文本随会话持久化，重开可续聊。
 
+语音：浏览器录音（波形/时长/取消），重采样为 16k 单声道 WAV 后 `POST /api/asr`；识别使用本地 sherpa-onnx Paraformer 中文模型（先运行 `npm run asr:model`），音频不出本机。TTS 默认使用浏览器 `speechSynthesis`（系统音色、语速可调，可正文朗读单条回复）；如配置 `TTS_BASE_URL` / `TTS_MODEL` / `TTS_VOICE`，`POST /api/tts` 会改用 OpenAI 兼容 `/audio/speech` 返回音频。麦克风需在 localhost 或 HTTPS 下使用。
+
 ## 质量校验
 
 ```bash
 cd server
-node --import jiti/register scripts/regression.ts   # 全流程回归（32 项）
+node --import jiti/register scripts/regression.ts   # 全流程回归（36 项）
 node --import jiti/register scripts/eval-rag.ts     # RAG 评测（Hit@K / MRR / 延迟）
 node --import jiti/register scripts/check-security.ts  # 安全策略单测
 node --import jiti/register scripts/check-vision.ts # 图片问答端到端（上传→读图/OCR→作答）
+node --import jiti/register scripts/check-voice.ts  # 语音端到端（ASR→文本、TTS 模式）
 ```
 
 ## 生产构建
@@ -115,4 +123,5 @@ docker compose -f docker/docker-compose.yml stop edu-agent
 - 访问 http://localhost:3000 （API 与前端同端口，WebSocket 走同一端口 `/ws`）
 - 应用配置读取 `server/.env`（compose `env_file`）；容器内 Milvus 地址为 `milvus:19530`
 - 数据持久化：`server/data`（SQLite、模型配置）与 `server/uploads`（原始文件）以 bind mount 挂载，重建容器不丢数据
+- 语音识别模型不打入 git：构建镜像前先在宿主机运行 `npm run asr:model`，`server/models` 会 COPY 进镜像；运行时需要 `libgomp1`（Dockerfile 已安装）
 - 镜像基于 `node:24-bookworm-slim`（`node:sqlite` 需要 Node ≥ 22.5），构建时 npm 走 npmmirror

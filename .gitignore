@@ -7,5 +7,6 @@ dist/
 uploads/
 data/
 server/data/
+server/models/sherpa-onnx-paraformer-zh-small/
 *.log
 .DS_Store

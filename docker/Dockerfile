@@ -17,11 +17,15 @@ ENV NODE_ENV=production \
 COPY package.json package-lock.json ./
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN npm ci --workspace server --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY server/src server/src
 COPY server/agent-workspace server/agent-workspace
 COPY server/scripts server/scripts
 COPY server/testdata server/testdata
+COPY server/models server/models
 COPY --from=build /app/web/dist web/dist
 EXPOSE 3000
 WORKDIR /app/server

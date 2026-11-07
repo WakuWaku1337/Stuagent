@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Clock, Camera, Picture, Promotion, Refresh, VideoPause } from '@element-plus/icons-vue';
+import { Clock, Camera, Headset, Loading, Microphone, Picture, Promotion, Refresh, VideoPause } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useChatStore, type ChatMessage } from '../stores/chat';
 import MarkdownView from '../components/MarkdownView.vue';
 import ChatHistory from '../components/ChatHistory.vue';
 import type { ConversationItem } from '../api/conversations';
 import { api } from '../api/data';
+import { asrStatus } from '../api/voice';
+import { useSpeech } from '../composables/useSpeech';
+import { useVoiceRecorder } from '../composables/useVoiceRecorder';
 
 const chat = useChatStore();
 const route = useRoute();
@@ -41,6 +44,38 @@ const stateText = computed(() => {
   return '在线 · 回答附带教材引用';
 });
 
+const asrReady = ref(true);
+const asrHint = ref('');
+
+const {
+  supported: voiceSupported,
+  recording,
+  recognizing,
+  seconds: recordSeconds,
+  levels: recordLevels,
+  start: startRecording,
+  stop: stopRecording,
+  cancel: cancelRecording,
+} = useVoiceRecorder({
+  onText: appendTranscript,
+  onError: (message) => ElMessage.error(message),
+});
+
+const {
+  supported: speechSupported,
+  voices: ttsVoices,
+  voiceGroups: ttsVoiceGroups,
+  voiceURI: ttsVoice,
+  rate: ttsRate,
+  speaking: ttsSpeaking,
+  speakingKey,
+  error: speechError,
+  speak: speakText,
+  preview: previewSpeech,
+  stop: stopSpeech,
+  selectVoice: selectTtsVoice,
+} = useSpeech();
+
 const canAddImages = computed(
   () => !chat.streaming && visionMode.value !== 'none' && chat.pendingImages.length < 4,
 );
@@ -53,10 +88,23 @@ const imageHint = computed(() => {
   return '';
 });
 
+const micDisabled = computed(
+  () => !voiceSupported.value || !asrReady.value || recognizing.value || chat.streaming,
+);
+
+const micTitle = computed(() => {
+  if (recording.value) return '停止录音';
+  if (!asrReady.value) return '语音模型未安装';
+  if (!voiceSupported.value) return '当前浏览器不支持录音';
+  return '语音输入';
+});
+
 const sendDisabled = computed(
   () =>
     (!input.value.trim() && chat.pendingImages.length === 0) ||
-    chat.pendingImages.some((image) => image.uploading),
+    chat.pendingImages.some((image) => image.uploading) ||
+    recording.value ||
+    recognizing.value,
 );
 
 function ocrTextOf(message: ChatMessage): string {
@@ -65,6 +113,48 @@ function ocrTextOf(message: ChatMessage): string {
 
 function previewList(message: ChatMessage): string[] {
   return (message.attachments ?? []).map((attachment) => attachment.url);
+}
+
+function formatSeconds(value: number): string {
+  const total = Math.max(0, Math.floor(value));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function messageKey(message: ChatMessage, index: number): string {
+  return message.message_id ?? `local-${index}`;
+}
+
+function appendTranscript(text: string) {
+  const current = input.value.trim();
+  input.value = current ? `${current} ${text}` : text;
+  nextTick(() => inputRef.value?.focus());
+}
+
+function toggleRecording() {
+  if (recording.value) {
+    void stopRecording();
+    return;
+  }
+  if (!asrReady.value) {
+    ElMessage.warning(asrHint.value || '语音模型未安装');
+    return;
+  }
+  void startRecording();
+}
+
+async function toggleSpeak(message: ChatMessage, index: number) {
+  const key = messageKey(message, index);
+  if (speakingKey.value === key && ttsSpeaking.value) {
+    stopSpeech();
+    return;
+  }
+  const ok = await speakText(message.content, key);
+  if (!ok && speechError.value) ElMessage.error(speechError.value);
+}
+
+async function previewTts() {
+  const ok = await previewSpeech();
+  if (!ok && speechError.value) ElMessage.error(speechError.value);
 }
 
 let stickToBottom = true;
@@ -247,6 +337,13 @@ onMounted(async () => {
   } catch {
     visionMode.value = 'vision';
   }
+  try {
+    const status = await asrStatus();
+    asrReady.value = status.ready;
+    asrHint.value = status.hint ?? '';
+  } catch {
+    asrReady.value = true;
+  }
   if (id) {
     stickToBottom = true;
     await chat.open(id);
@@ -293,6 +390,54 @@ onMounted(async () => {
       </div>
       <div class="chat-actions">
         <el-tag v-if="lastAgent" size="small" effect="plain" class="agent-tag">{{ lastAgent }}</el-tag>
+        <el-popover placement="bottom-end" :width="304" trigger="click" popper-class="tts-popover">
+          <template #reference>
+            <el-button
+              class="tts-button"
+              text
+              circle
+              :icon="Headset"
+              :class="{ active: ttsSpeaking }"
+              aria-label="朗读设置"
+              title="朗读设置"
+            />
+          </template>
+          <div class="tts-panel">
+            <div class="tts-head">
+              <span>朗读设置</span>
+              <span v-if="!speechSupported" class="tts-warn">当前浏览器不支持语音合成</span>
+              <span v-else-if="ttsVoices.length === 0" class="tts-warn">未检测到系统语音</span>
+            </div>
+            <el-select
+              :model-value="ttsVoice"
+              filterable
+              size="small"
+              placeholder="系统默认语音"
+              :disabled="!speechSupported"
+              :teleported="false"
+              @change="selectTtsVoice"
+            >
+              <el-option-group v-for="group in ttsVoiceGroups" :key="group.label" :label="group.label">
+                <el-option
+                  v-for="voice in group.items"
+                  :key="voice.voiceURI"
+                  :label="voice.name"
+                  :value="voice.voiceURI"
+                />
+              </el-option-group>
+            </el-select>
+            <div class="tts-rate">
+              <span class="tts-label">语速</span>
+              <span class="tts-value numeric">{{ ttsRate.toFixed(1) }}x</span>
+            </div>
+            <el-slider v-model="ttsRate" :min="0.6" :max="1.6" :step="0.1" size="small" />
+            <div class="tts-actions">
+              <el-button size="small" @click="previewTts()">试听</el-button>
+              <el-button v-if="ttsSpeaking" size="small" text @click="stopSpeech()">停止朗读</el-button>
+            </div>
+            <p class="tts-note">默认优先使用本地系统音色；在线音色会把朗读文本发送到系统语音服务。配置云端 TTS 后会自动改用服务端音频。</p>
+          </div>
+        </el-popover>
         <el-select v-model="reasoning" size="small" class="reasoning-select" aria-label="单次思考强度">
           <el-option label="默认推理" value="default" />
           <el-option label="低" value="low" />
@@ -319,7 +464,7 @@ onMounted(async () => {
           <p class="chat-empty-kicker">主讲老师</p>
           <h2 class="chat-empty-title">先说清楚卡在哪一步。</h2>
           <p class="chat-empty-desc">
-            可以直接问概念、贴题目或发一张题目照片。回答会标注引用来源，便于回查原文。
+            可以直接问概念、贴题目、发一张题目照片，或直接说一段话。回答会标注引用来源，便于回查原文。
           </p>
           <div class="prompt-grid">
             <button
@@ -338,6 +483,21 @@ onMounted(async () => {
           <div class="bubble" :class="m.role">
             <div v-if="m.role === 'assistant'" class="bubble-top">
               <el-tag size="small" effect="plain">{{ m.agent ?? '智学主讲' }}</el-tag>
+              <button
+                v-if="m.content"
+                type="button"
+                class="speak-btn"
+                :class="{ active: speakingKey === messageKey(m, i) }"
+                :disabled="chat.streaming"
+                :aria-label="speakingKey === messageKey(m, i) ? '停止朗读' : '朗读回复'"
+                :title="speakingKey === messageKey(m, i) ? '停止朗读' : '朗读回复'"
+                @click="toggleSpeak(m, i)"
+              >
+                <el-icon>
+                  <VideoPause v-if="speakingKey === messageKey(m, i)" />
+                  <Headset v-else />
+                </el-icon>
+              </button>
             </div>
             <MarkdownView v-if="m.role === 'assistant'" :text="m.content || ' '" />
             <template v-else>
@@ -406,6 +566,26 @@ onMounted(async () => {
     <div class="composer-wrap">
       <div class="composer">
         <div class="composer-body">
+          <div v-if="recording" class="voice-panel">
+            <span class="voice-dot" aria-hidden="true" />
+            <span class="voice-time numeric">{{ formatSeconds(recordSeconds) }}</span>
+            <div class="voice-wave" aria-hidden="true">
+              <i
+                v-for="(level, i) in recordLevels"
+                :key="i"
+                :style="{ height: `${Math.round(5 + level * 21)}px` }"
+              />
+            </div>
+            <span class="voice-state">正在录音</span>
+            <div class="voice-actions">
+              <el-button text size="small" @click="cancelRecording()">取消</el-button>
+              <el-button type="primary" size="small" @click="stopRecording()">停止并识别</el-button>
+            </div>
+          </div>
+          <div v-else-if="recognizing" class="voice-panel recognizing">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span class="voice-state">正在识别语音…</span>
+          </div>
           <div v-if="chat.pendingImages.length" class="image-strip">
             <div v-for="image in chat.pendingImages" :key="image.id" class="image-chip">
               <img :src="image.previewUrl" :alt="image.name" />
@@ -424,6 +604,16 @@ onMounted(async () => {
           <p v-if="imageHint" class="image-hint">{{ imageHint }}</p>
           <div class="composer-row">
             <div class="composer-tools">
+              <el-button
+                text
+                circle
+                :icon="recording ? VideoPause : Microphone"
+                :class="{ active: recording }"
+                :disabled="micDisabled"
+                :aria-label="micTitle"
+                :title="micTitle"
+                @click="toggleRecording"
+              />
               <el-button
                 text
                 circle
@@ -465,7 +655,7 @@ onMounted(async () => {
           </div>
         </div>
       </div>
-      <p class="composer-hint">Enter 发送 · Shift + Enter 换行 · 支持拍照或上传题目图片</p>
+      <p class="composer-hint">Enter 发送 · Shift + Enter 换行 · 支持语音、拍照与图片提问</p>
       <input
         ref="cameraInput"
         class="file-input"
@@ -741,7 +931,40 @@ onMounted(async () => {
 }
 
 .bubble-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 7px;
+}
+
+.speak-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.speak-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.speak-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.speak-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .user-text {
@@ -939,6 +1162,150 @@ onMounted(async () => {
 .composer-tools :deep(.el-button:hover:not(.is-disabled)) {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.composer-tools :deep(.el-button.active) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.voice-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 2px 2px 9px;
+  padding: 8px 10px;
+  border: 1px solid #d8e1fc;
+  border-radius: 9px;
+  background: var(--accent-soft);
+}
+
+.voice-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 91, 234, 0.12);
+  animation: voice-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.82);
+  }
+}
+
+.voice-time {
+  min-width: 38px;
+  font-size: 12px;
+  color: var(--accent-deep);
+}
+
+.voice-wave {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  min-width: 140px;
+  height: 28px;
+  overflow: hidden;
+}
+
+.voice-wave i {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.6;
+  transition: height 0.08s linear;
+}
+
+.voice-state {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.voice-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.voice-panel.recognizing {
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.voice-panel.recognizing :deep(.el-icon) {
+  color: var(--accent);
+}
+
+.tts-button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tts-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.tts-warn {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.tts-label {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.tts-rate {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.tts-value {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.tts-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.tts-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.tts-panel :deep(.el-select) {
+  width: 100%;
 }
 
 .composer-row :deep(.el-input) {

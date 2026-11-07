@@ -206,5 +206,44 @@ await check('media reject non-image', async () => {
   return res.status === 422 && body.code === 'IMAGE_TYPE';
 });
 
+async function uploadAudio() {
+  const wav = await readFile('testdata/asr-question-16k.wav');
+  const form = new FormData();
+  form.append('audio', new Blob([wav], { type: 'audio/wav' }), 'asr-question.wav');
+  const res = await fetch(BASE + '/api/asr', { method: 'POST', body: form });
+  return { status: res.status, body: await res.json() };
+}
+
+await check('asr ready', async () => {
+  const body = (await getJson('/api/asr')).body;
+  return body.ready === true && typeof body.model === 'string';
+});
+await check('asr transcribe', async () => {
+  const { status, body } = await uploadAudio();
+  return (
+    status === 200 &&
+    typeof body.text === 'string' &&
+    body.text.includes('直角') &&
+    body.duration_ms > 1000 &&
+    body.latency_ms >= 0
+  );
+});
+await check('asr reject invalid audio', async () => {
+  const form = new FormData();
+  form.append('audio', new Blob([Buffer.from('not audio')], { type: 'audio/wav' }), 'bad.wav');
+  const res = await fetch(BASE + '/api/asr', { method: 'POST', body: form });
+  const body = await res.json();
+  return res.status === 422 && body.code === 'ASR_FORMAT';
+});
+await check('tts mode', async () => {
+  const res = await fetch(BASE + '/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: '你好' }),
+  });
+  const body = await res.json();
+  return res.status === 200 && (body.mode === 'browser' || body.mode === 'server');
+});
+
 console.log(`---\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

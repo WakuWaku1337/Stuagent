@@ -1,6 +1,13 @@
 # 智学 实施进度
 
-当前阶段：阶段 I · S20 图片输入已完成（2026-11-07）
+当前阶段：阶段 I · S21 语音能力已完成（2026-11-07）
+- 本地 ASR：sherpa-onnx Paraformer 中文小模型（离线），`GET /api/asr` 状态、`POST /api/asr`（WAV，8k~48kHz，≤60s）
+- 前端录音：MediaRecorder + AnalyserNode 波形、计时、取消/停止；录音结束后在浏览器内重采样为 16k 单声道 WAV，识别文字进入输入框可编辑
+- TTS：`GET /api/tts` 能力、`POST /api/tts`；默认浏览器 speechSynthesis（优先本地中文音色，语速可调并持久化），配置 `TTS_BASE_URL/TTS_MODEL/TTS_VOICE` 后走 OpenAI 兼容 `/audio/speech` 返回音频
+- UI：输入框麦克风按钮、录音面板（波形/时长/取消）、每条回复的朗读按钮、朗读设置弹层（音色/语速/试听/停止）
+- Docker：镜像包含 ASR 模型与 libgomp1；容器内 ASR 实测通过；模型文件不入 git，首次运行 `npm run asr:model`
+
+阶段 I · S20 图片输入已完成（2026-11-07）
 - 新增 media 表与 `POST /api/media/upload`、`GET /api/media/:id`：JPG/PNG/WebP、单张 ≤8MB、一次 ≤4 张、magic bytes 校验、hash 去重、immutable 缓存与 nosniff
 - 前端相机/相册选图、多图预览、最长边 1600px / JPEG 0.85 压缩、上传进度与移除
 - 视觉模型直读图片：Pi `session.prompt` 携带 ImageContent，模型目录增加 vision 能力标记
@@ -17,10 +24,20 @@
 
 历史：H 进阶与收尾 —— 已完成（S17、S18 验收通过）；已增加 Docker 本地部署
 旧编号 S19/S20（模型设置、用量统计）已于 2026-11-07 完成，见下方验收证据
-已完成对话：S01–S18 全部完成（A–H）；阶段 I S19 会话管理、S20 图片输入完成
-下一步对话：S21 语音能力（ASR 输入、TTS 播报）
+已完成对话：S01–S18 全部完成（A–H）；阶段 I S19 会话管理、S20 图片输入、S21 语音能力完成
+下一步对话：S22 存储治理（用量统计、孤儿回收、按周期清理、删会话连带删除）
 
 关键文件/接口：
+- server/src/voice/asr.ts：sherpa-onnx Paraformer 加载、WAV 解析（8k~48kHz/16-bit）、16k 重采样、识别与文本清洗
+- server/src/routes/voice.ts：GET/POST /api/asr、GET/POST /api/tts（浏览器模式/OpenAI 兼容服务端 TTS）
+- server/scripts/fetch-asr-model.ts + server/models/README.md：ASR 模型下载（hf-mirror，约 82MB，不入库）
+- web/src/composables/useVoiceRecorder.ts：getUserMedia、MediaRecorder、波形、计时、重采样上传、取消
+- web/src/composables/useSpeech.ts：浏览器 TTS、音色/语速持久化、服务端 TTS 音频回退、朗读状态
+- web/src/utils/audio.ts + web/src/utils/speech.ts：webm/opus → 16k WAV、Markdown 转朗读文本
+- web/src/api/voice.ts：ASR 状态/上传、TTS 请求（JSON/音频双模式）
+- web/src/views/ChatView.vue：麦克风按钮、录音面板、朗读按钮与设置弹层
+- server/scripts/check-voice.ts + server/testdata/asr-question-16k.wav：语音端到端脚本与测试音频
+- docker/Dockerfile：COPY server/models、安装 libgomp1
 - server/src/media/service.ts：图片落盘（uploads/media）、magic bytes 校验、hash 去重、附件/OCR、历史图片读取
 - server/src/routes/media.ts：POST /api/media/upload、GET /api/media/:id（ETag/immutable/nosniff）
 - server/src/chat/handler.ts：/api/chat 与 /api/conversations/:id/messages 共用处理器（安全检查、图片/OCR、落库、SSE、引用合并、写链冲刷）
@@ -49,11 +66,16 @@
 - server/src/routes/courseware.ts：/api/courseware（列表/生成/预览 HTML/删除），HTML 带 CSP 与 nosniff
 - server/src/index.ts：/api/chat 接入安全检查（400 SECURITY_BLOCKED）、输入/输出脱敏、SSE security 事件；后端托管 web/dist（SPA 回退，API 404 保持 JSON）
 - server/scripts/eval-rag.ts + server/testdata/eval-rag.json：RAG 评测集（8 题）与 Hit@K/MRR/延迟统计
-- server/scripts/regression.ts：全流程回归（32 项，含设置/用量 5 项、会话 7 项、图片 4 项）
+- server/scripts/regression.ts：全流程回归（36 项，含设置/用量 5 项、会话 7 项、图片 4 项、语音 4 项）
 - server/scripts/check-security.ts：安全单测（PII/密钥/注入/流式脱敏）
 - web/src/views/CoursewareView.vue：课件页（生成、列表、沙箱 iframe 预览）；路由 /courseware
 
 验收证据（2026-11-07 实测）：
+- S21 本地 ASR：sherpa-onnx Paraformer zh small（82MB）加载后，6.65s 中文题音频识别为“已知直角三角形两条直角边分别是三和四求斜边长度”；开发机首请求 3.2s（含模型加载）/解码 145ms，Docker 首请求 1.5s/解码 70~79ms
+- S21 浏览器录音：Edge 假麦克风（16k WAV）实测麦克风按钮→录音面板 00:06、28 根波形柱、取消可清空；停止后识别文字进入输入框，发送后正常回答
+- S21 TTS：浏览器共有 324 个系统/在线音色；默认优先本地 Huihui，切换 Kangkang 与语速 1.3x 后 localStorage 持久化；试听与单条回复朗读均使 `speechSynthesis.speaking=true`，按钮高亮；未配置服务端 TTS 时 `POST /api/tts` 返回 `{mode:'browser'}`
+- S21 UI：录音面板、麦克风/朗读按钮、朗读设置弹层在 1440 与 768 宽度均正常，无横向溢出
+- S21 回归与脚本：36/36 PASS（新增 asr ready、asr transcribe、asr reject invalid audio、tts mode）；`scripts/check-voice.ts` ALL PASS；Docker 重建后同样通过
 - S20 图片链路：900×520 PNG（40,322 B）上传 201，GET 返回 `image/png` + `nosniff` + immutable；If-None-Match 返回 304；重复上传命中 hash 去重（同一 media_id）；伪造 PNG 返回 422 IMAGE_TYPE；一次 5 张返回 400
 - S20 视觉直读：发送测试题图，模型按图作答斜边 5；浏览器实测图片气泡 260×178、无 OCR 提示，标题取自文字提问
 - S20 OCR 兜底：以 `LLM_VISION=0 LLM_OCR_MODEL=qwen3.8-flash` 启动时 `/api/model` 返回 `image_mode=ocr`；同一张图 OCR 195 字并作答 5（20.3s），气泡可展开“识别文字”；仅图片消息标题为“图片提问（1 张）”
@@ -84,7 +106,8 @@
 启动方式：
 - 开发：npm run milvus:up；npm run dev（server 3000 + web 5173）
 - Docker（本地试用，2026-11-07 实测）：docker compose -f docker/docker-compose.yml up -d --build；访问 http://localhost:3000；数据挂载 server/data 与 server/uploads；容器内 Milvus 地址 milvus:19530；实测 health、模型、SPA、资料、RAG、对话（含引用）全部正常
-- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts；图片问答：scripts/check-vision.ts
+- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts；图片问答：scripts/check-vision.ts；语音：scripts/check-voice.ts
+- 语音模型：npm run asr:model（下载到 server/models，约 82MB；不入库；Docker 构建前需先下载）
 
 关键决策与偏离（需评审知悉）：
 1. 安全为自研轻量策略（规则 + 脱敏 + 流式过滤），未接入 SuperAgent 安全 SDK（设计与 §4.3 均标注其为 P2 可选）。
@@ -99,6 +122,10 @@
 10. 图片 OCR 不引入本地 tesseract：优先用同 Provider 的视觉模型识别（可 `LLM_OCR_MODEL` 指定模型）；没有可用视觉模型时直接拒绝图片并提示切换模型，不做假 OCR。
 11. 图片压缩在前端完成（最长边 1600px、JPEG 0.85）；服务端只做 magic bytes 校验、8MB/4 张上限与 hash 去重，不做二次缩放。
 12. 历史回放图片有上限：最近 2 条图片消息、最多 4 张、单张 ≤2MB；非视觉模型回放保存的 OCR 文本，避免重复 OCR。
+13. ASR 采用 sherpa-onnx Paraformer 中文小模型（Node N-API，预编译），未用 faster-whisper：Docker 运行时没有 Python/ffmpeg，模型也不宜在构建时联网拉取；模型经 hf-mirror 下载到 server/models，不入 git。
+14. TTS 默认使用浏览器 speechSynthesis（系统 SAPI 音色，默认优先本地中文音色，语速可调并持久化），未接 edge-tts/piper：当前 MaaS 没有 TTS 接口，本地再引入一套 TTS 模型收益低；`POST /api/tts` 保留 OpenAI 兼容服务端 TTS 配置（TTS_BASE_URL/TTS_MODEL/TTS_VOICE）。
+15. 录音交互为点击开始/停止 + 波形/计时/取消（非按住说话）；录音在浏览器解码后重采样为 16k 单声道 WAV，服务端接受 8k~48kHz 并交给 sherpa 重采样。
+16. 在线音色会把朗读文本发送到系统语音服务；UI 明确提示，默认选择本地音色。
 
 遗留问题与风险：
 - GitHub 直连依赖 SteamTools TLS 代理 + 仓库级 CA；gh 尚未登录，triage 标签未创建；本地历史与远程初始提交不相关，尚未推送
@@ -109,3 +136,7 @@
 - 图片上传后若未发送或会话被删，文件暂为孤儿，等 S22 存储治理统一回收；当前没有单张删除接口
 - 图片内容本身可能含提示注入；OCR 文本已加“仅作解题材料”包裹，但未做图像级内容审核
 - HEIC 等格式依赖浏览器解码，无法解码时提示改用 JPG/PNG；OCR 会额外消耗一次模型调用（实测约 20s）
+- ASR 模型约 82MB 且不入库：新环境/新镜像构建前必须 `npm run asr:model`，否则 `/api/asr` 返回 503 并提示
+- 中文 Paraformer 不输出标点、无热词/自定义词表；识别结果进入输入框由用户校对后发送
+- TTS 音色依赖操作系统语音包；在线 Natural 音色需要网络并会把文本发给系统语音服务；服务端 TTS 仅实现 OpenAI 兼容协议，未对真实云 TTS 做联调
+- 麦克风需在 localhost 或 HTTPS 下使用；录音音频不落库（隐私优先），无法回放原始录音

@@ -14,7 +14,8 @@
     "build": "npm run build --workspace web",
     "milvus:up": "docker compose -f docker/docker-compose.yml up -d",
     "milvus:down": "docker compose -f docker/docker-compose.yml down",
-    "milvus:health": "curl -sf http://localhost:9091/healthz"
+    "milvus:health": "curl -sf http://localhost:9091/healthz",
+    "asr:model": "npm run asr:model --workspace server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

@@ -16,6 +16,7 @@ import settingsRoutes from './routes/settings.ts';
 import usageRoutes from './routes/usage.ts';
 import conversations from './routes/conversations.ts';
 import media from './routes/media.ts';
+import voice from './routes/voice.ts';
 import { handleChat, type ChatBody } from './chat/handler.ts';
 import { searchKnowledge } from './rag/service.ts';
 import { AGENTS } from './agents/roles.ts';
@@ -93,6 +94,7 @@ app.route('/api/settings', settingsRoutes);
 app.route('/api/usage', usageRoutes);
 app.route('/api/conversations', conversations);
 app.route('/api/media', media);
+app.route('/api', voice);
 
 app.post('/api/knowledge/search', async (c) => {
   const body = await c.req.json<{ query?: string; topK?: number; subject?: string }>().catch(() => null);
