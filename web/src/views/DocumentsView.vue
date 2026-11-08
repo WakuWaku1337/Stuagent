@@ -26,6 +26,7 @@ const message = ref('');
 const query = ref('');
 const statusFilter = ref('all');
 const reindexing = ref<Set<string>>(new Set());
+const retryingOcr = ref<Set<string>>(new Set());
 const ocrDetails = ref<Record<string, OcrDetail>>({});
 const reviewVisible = ref(false);
 const reviewDoc = ref<DocumentItem | null>(null);
@@ -127,7 +128,14 @@ function reviewCount(doc: DocumentItem) {
 }
 
 function canReview(doc: DocumentItem) {
-  return doc.status === 'needs_review' || (doc.status === 'failed' && Boolean(ocrJob(doc)));
+  return (
+    doc.status === 'needs_review' ||
+    (doc.status === 'failed' && (ocrDetails.value[doc.document_id]?.pages.length ?? 0) > 0)
+  );
+}
+
+function canRetryOcr(doc: DocumentItem) {
+  return doc.status === 'failed' && Boolean(ocrJob(doc));
 }
 
 function formatSize(bytes: number) {
@@ -189,8 +197,26 @@ async function pollOcr() {
   }
 }
 
-async function openReview(doc: DocumentItem) {
+async function retryOcr(doc: DocumentItem) {
+  const next = new Set(retryingOcr.value);
+  next.add(doc.document_id);
+  retryingOcr.value = next;
+  message.value = `正在重新执行 ${doc.filename} 的 OCR…`;
   try {
+    await api.retryOcr(doc.document_id);
+    ElMessage.success('OCR 已重新入队');
+    await load();
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : String(error);
+    ElMessage.error(message.value);
+  } finally {
+    const rest = new Set(retryingOcr.value);
+    rest.delete(doc.document_id);
+    retryingOcr.value = rest;
+  }
+}
+
+async function openReview(doc: DocumentItem) {  try {
     const detail = await api.ocrDetail(doc.document_id);
     if (!detail.job) {
       ElMessage.warning('该文档没有 OCR 任务');
@@ -695,6 +721,16 @@ onBeforeUnmount(() => {
                     校对{{ reviewCount(row as DocumentItem) ? `（${reviewCount(row as DocumentItem)}）` : '' }}
                   </el-button>
                   <el-button
+                    v-if="canRetryOcr(row as DocumentItem)"
+                    link
+                    type="primary"
+                    size="small"
+                    :loading="retryingOcr.has(row.document_id)"
+                    @click="retryOcr(row as DocumentItem)"
+                  >
+                    重试 OCR
+                  </el-button>
+                  <el-button
                     link
                     type="primary"
                     size="small"
@@ -1025,6 +1061,7 @@ onBeforeUnmount(() => {
 .doc-ops {
   display: flex;
   gap: 2px;
+  flex-wrap: wrap;
 }
 
 .doc-status {

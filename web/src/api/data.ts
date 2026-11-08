@@ -308,6 +308,11 @@ export const api = {
       `/api/documents/${id}/ocr/confirm`,
       { method: 'POST' },
     ),
+  retryOcr: (id: string) =>
+    request<{ document_id: string; status: string; total_pages: number }>(
+      `/api/documents/${id}/ocr/retry`,
+      { method: 'POST' },
+    ),
   mastery: () => request<{ mastery: MasteryItem[] }>('/api/mastery'),
   wrongbook: () => request<{ records: WrongRecord[]; due: number }>('/api/wrongbook'),
   exams: () => request<{ exams: ExamSummary[] }>('/api/reviews'),
