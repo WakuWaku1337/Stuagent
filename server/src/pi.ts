@@ -43,11 +43,12 @@ const agentDir = join(dataRoot, 'pi-agent');
 const workspaceRoot = join(serverRoot, 'agent-workspace');
 
 export interface ChatEvent {
-  type: 'delta' | 'done' | 'error' | 'citations' | 'continuation' | 'incomplete';
+  type: 'delta' | 'done' | 'error' | 'citations' | 'continuation' | 'incomplete' | 'thinking';
   text?: string;
   message?: string;
   citations?: Citation[];
   attempt?: number;
+  reasoning_tokens?: number;
 }
 
 export interface ChatImage {
@@ -348,6 +349,7 @@ export async function chat(
     let stopReason = '';
     let continuing = false;
     let continuationText = '';
+    let lastThinkingAt = 0;
 
     try {
       const session = await getSession(sessionId, agentId, candidate, reasoning, options.history);
@@ -356,6 +358,14 @@ export async function chat(
       markKeyUsed(candidate.keyId);
 
       const unsubscribe = session.subscribe((event) => {
+        if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta') {
+          const now = Date.now();
+          if (now - lastThinkingAt > 800) {
+            lastThinkingAt = now;
+            onEvent({ type: 'thinking' });
+          }
+          return;
+        }
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
           const delta = event.assistantMessageEvent.delta;
           if (continuing) {

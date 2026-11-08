@@ -76,7 +76,7 @@ export async function generateVisualization(input: {
           { role: 'system', content: JUDGE_PROMPT },
           { role: 'user', content: `题目：${question}${input.subject ? `（${input.subject}）` : ''}` },
         ],
-        { scenario: 'courseware', subject: input.subject },
+        { scenario: 'courseware', subject: input.subject, timeoutMs: 8000 },
       );
       if (decision.visualize === false) return null;
       const type = decision.type as VisualizationType;

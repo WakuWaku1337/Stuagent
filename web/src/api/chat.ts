@@ -24,7 +24,8 @@ export interface ChatStreamEvent {
     | 'media'
     | 'continuation'
     | 'incomplete'
-    | 'visualization';
+    | 'visualization'
+    | 'thinking';
   text?: string;
   message?: string;
   citations?: Citation[];

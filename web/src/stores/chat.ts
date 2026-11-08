@@ -24,6 +24,7 @@ export interface ChatMessage {
   attachments?: MessageAttachment[];
   created_at?: number;
   incomplete?: boolean;
+  thinking?: boolean;
   visualization?: import('../api/visualize').Visualization;
   visualization_id?: string | null;
 }
@@ -333,7 +334,15 @@ export const useChatStore = defineStore('chat', () => {
           if (event.type === 'media' && event.attachments?.length) {
             userMessage.attachments = event.attachments;
           }
-          if (event.type === 'delta' && event.text) reply.content += event.text;
+          if (event.type === 'delta' && event.text) {
+            reply.content += event.text;
+            reply.thinking = false;
+          }
+          if (event.type === 'thinking') reply.thinking = !reply.content;
+          if (event.type === 'done') {
+            reply.thinking = false;
+            streaming.value = false;
+          }
           if (event.type === 'citations' && event.citations) {
             reply.citations = [...(reply.citations ?? []), ...event.citations];
           }
@@ -376,7 +385,15 @@ export const useChatStore = defineStore('chat', () => {
         id,
         '',
         (event) => {
-          if (event.type === 'delta' && event.text) reply.content += event.text;
+          if (event.type === 'delta' && event.text) {
+            reply.content += event.text;
+            reply.thinking = false;
+          }
+          if (event.type === 'thinking') reply.thinking = !reply.content;
+          if (event.type === 'done') {
+            reply.thinking = false;
+            streaming.value = false;
+          }
           if (event.type === 'citations' && event.citations) {
             reply.citations = [...(reply.citations ?? []), ...event.citations];
           }

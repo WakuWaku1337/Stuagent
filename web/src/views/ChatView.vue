@@ -40,7 +40,7 @@ const lastAgent = computed(() => {  const assistant = [...chat.messages].reverse
 
 const lastAssistantIndex = computed(() => {
   for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
-    if (chat.messages[index].role === 'assistant' && chat.messages[index].content) return index;
+    if (chat.messages[index].role === 'assistant') return index;
   }
   return -1;
 });
@@ -505,6 +505,13 @@ onMounted(async () => {
                   <Headset v-else />
                 </el-icon>
               </button>
+            </div>
+            <div
+              v-if="m.role === 'assistant' && !m.content && i === lastAssistantIndex && (m.thinking || chat.streaming)"
+              class="thinking-hint"
+            >
+              <span class="thinking-dot" /><span class="thinking-dot" /><span class="thinking-dot" />
+              <span>模型正在思考，首字出现前需要一点时间</span>
             </div>
             <MarkdownView v-if="m.role === 'assistant'" :text="m.content || ' '" />
             <div
@@ -1062,6 +1069,35 @@ onMounted(async () => {
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
+}
+
+.thinking-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thinking-pulse 1.1s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 .cite-label {
