@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
 import { usageCost, usageDaily, usageRecords, usageSummary } from '../usage/store.ts';
+import { currentLearnerId, currentRole } from '../learning/context.ts';
 
 const usage = new Hono();
+
+function scope(): string | undefined {
+  return currentRole() === 'admin' ? undefined : currentLearnerId();
+}
 
 function daysFrom(value: string | undefined): number {
   const days = Number(value ?? 30);
@@ -9,19 +14,19 @@ function daysFrom(value: string | undefined): number {
   return Math.min(365, Math.max(1, Math.round(days)));
 }
 
-usage.get('/summary', (c) => c.json(usageSummary(daysFrom(c.req.query('days')))));
+usage.get('/summary', (c) => c.json(usageSummary(daysFrom(c.req.query('days')), scope())));
 
 usage.get('/daily', (c) => {
   const days = daysFrom(c.req.query('days'));
-  return c.json({ days, daily: usageDaily(days) });
+  return c.json({ days, daily: usageDaily(days, scope()) });
 });
 
-usage.get('/cost', (c) => c.json(usageCost(daysFrom(c.req.query('days')))));
+usage.get('/cost', (c) => c.json(usageCost(daysFrom(c.req.query('days')), scope())));
 
 usage.get('/export', (c) => {
   const days = daysFrom(c.req.query('days'));
   const format = c.req.query('format') === 'json' ? 'json' : 'csv';
-  const rows = usageRecords(days);
+  const rows = usageRecords(days, 500, scope());
   if (format === 'json') {
     c.header('Content-Disposition', `attachment; filename="usage-${days}d.json"`);
     return c.json({ exported_at: new Date().toISOString(), days, records: rows });

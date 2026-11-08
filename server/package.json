@@ -6,7 +6,16 @@
   "scripts": {
     "dev": "node --watch --watch-path=src --import jiti/register src/index.ts",
     "start": "node --import jiti/register src/index.ts",
-    "asr:model": "node --import jiti/register scripts/fetch-asr-model.ts"
+    "auth:bootstrap": "node --import jiti/register scripts/auth-bootstrap.ts",
+    "auth:reset": "node --import jiti/register scripts/auth-reset.ts",
+    "user:create": "node --import jiti/register scripts/user-create.ts",
+    "auth:check": "node --import jiti/register scripts/check-auth.ts",
+    "auth:isolation": "node --import jiti/register scripts/check-isolation.ts",
+    "auth:migrate": "node --import jiti/register scripts/auth-migrate.ts",
+    "asr:model": "node --import jiti/register scripts/fetch-asr-model.ts",
+    "backup": "node --import jiti/register scripts/backup.ts",
+    "auth:admin-check": "node --import jiti/register scripts/check-admin.ts",
+    "bench:s23": "node --import jiti/register scripts/bench-s23.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.0",

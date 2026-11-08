@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Type } from 'typebox';
 import { defineTool } from '@earendil-works/pi-coding-agent';
-import { DEFAULT_LEARNER, listMemories, recallMemories, writeMemory } from './memory.ts';
+import { currentLearnerId } from './context.ts';
+import { listMemories, recallMemories, writeMemory } from './memory.ts';
 import { updateMastery, generateQuiz } from './quiz.ts';
 import { addWrongRecord, listWrongRecords } from './wrongbook.ts';
 import { listMastery } from './mastery.ts';
@@ -16,9 +17,9 @@ function saveManualQuestion(input: {
 }): string {
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO questions (question_id, bank_id, subject, knowledge_point, difficulty, content, options, answer, explanation, source, created_at)
-     VALUES (?, 'manual', NULL, ?, '未知', ?, '{}', ?, NULL, 'chat', ?)`,
-  ).run(id, input.knowledgePoint, input.question, input.correctAnswer, Date.now());
+    `INSERT INTO questions (question_id, bank_id, learner_id, subject, knowledge_point, difficulty, content, options, answer, explanation, source, created_at)
+     VALUES (?, 'manual', ?, NULL, ?, '未知', ?, '{}', ?, NULL, 'chat', ?)`,
+  ).run(id, currentLearnerId(), input.knowledgePoint, input.question, input.correctAnswer, Date.now());
   return id;
 }
 
@@ -76,7 +77,7 @@ export function createLearningTools() {
         knowledgePoint: params.knowledge_point,
       });
       const record = addWrongRecord({
-        learnerId: DEFAULT_LEARNER,
+        learnerId: currentLearnerId(),
         questionId,
         snapshot: {
           content: params.question,
@@ -104,7 +105,7 @@ export function createLearningTools() {
     }),
     async execute(_id, params) {
       const probability = updateMastery(params.knowledge_point, params.is_correct);
-      const weak = listMastery(DEFAULT_LEARNER).slice(0, 5);
+      const weak = listMastery(currentLearnerId()).slice(0, 5);
       return {
         content: [
           {
@@ -150,7 +151,7 @@ export function createLearningTools() {
     description: '查看今天到期需要复习的错题。学生问复习安排时调用。',
     parameters: Type.Object({}),
     async execute() {
-      const rows = listWrongRecords(DEFAULT_LEARNER, true);
+      const rows = listWrongRecords(currentLearnerId(), true);
       const text = rows.length
         ? rows
             .slice(0, 10)
@@ -172,7 +173,7 @@ export function createLearningTools() {
       limit: Type.Optional(Type.Number({ description: '返回条数，默认 10' })),
     }),
     async execute(_id, params) {
-      const rows = listMastery(DEFAULT_LEARNER).slice(0, params.limit ?? 10);
+      const rows = listMastery(currentLearnerId()).slice(0, params.limit ?? 10);
       const text = rows.length
         ? rows
             .map(

@@ -119,7 +119,12 @@ function ocrJob(doc: DocumentItem) {
 function ocrProgressText(doc: DocumentItem) {
   const job = ocrJob(doc);
   if (!job) return '';
-  const current = job.current_page ? ` · 第 ${job.current_page} 页` : '';
+  const docling = job.engine === 'auto' || job.engine.startsWith('docling');
+  const current = job.current_page
+    ? ` · 第 ${job.current_page} 页`
+    : docling && job.status === 'running'
+      ? ' · 整篇解析中'
+      : '';
   return `${job.done_pages}/${job.total_pages} 页 · ${job.progress}%${current}`;
 }
 

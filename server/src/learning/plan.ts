@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db, listDocuments } from '../store.ts';
-import { DEFAULT_LEARNER } from './memory.ts';
+import { currentLearnerId } from './context.ts';
 import { listMastery } from './mastery.ts';
 import { listWrongRecords } from './wrongbook.ts';
 
@@ -155,9 +155,9 @@ function buildContent(input: {
   dailyMinutes: number;
   subjects: string[];
 }): PlanContent {
-  const mastery = listMastery(DEFAULT_LEARNER);
+  const mastery = listMastery(currentLearnerId());
   const weak = mastery.filter((row) => row.probability < 0.85).slice(0, 8);
-  const due = listWrongRecords(DEFAULT_LEARNER, true);
+  const due = listWrongRecords(currentLearnerId(), true);
   const duePoints = due.map((row) => parseSnapshotPoint(row.question_snapshot)).filter(Boolean);
   const documents = listDocuments()
     .filter((doc) => doc.status === 'parsed' || doc.status === 'indexed')
@@ -290,7 +290,9 @@ function toPlan(row: PlanDbRow): LearningPlan {
 }
 
 function findPlan(id: string): LearningPlan | undefined {
-  const row = db.prepare('SELECT * FROM learning_plans WHERE plan_id = ?').get(id) as
+  const row = db
+    .prepare('SELECT * FROM learning_plans WHERE plan_id = ? AND learner_id = ?')
+    .get(id, currentLearnerId()) as
     | PlanDbRow
     | undefined;
   return row ? toPlan(row) : undefined;
@@ -313,7 +315,7 @@ function history(limit = 8): PlanHistoryItem[] {
        FROM learning_plans WHERE learner_id = ? AND status = 'archived'
        ORDER BY updated_at DESC LIMIT ?`,
     )
-    .all(DEFAULT_LEARNER, limit) as unknown as PlanHistoryItem[];
+    .all(currentLearnerId(), limit) as unknown as PlanHistoryItem[];
 }
 
 export function getPlanOverview(): PlanOverview {
@@ -322,7 +324,7 @@ export function getPlanOverview(): PlanOverview {
       `SELECT * FROM learning_plans WHERE learner_id = ? AND status IN ('active', 'completed')
        ORDER BY updated_at DESC LIMIT 1`,
     )
-    .get(DEFAULT_LEARNER) as PlanDbRow | undefined;
+    .get(currentLearnerId()) as PlanDbRow | undefined;
   return {
     plan: row ? toPlan(row) : null,
     history: history(),
@@ -346,14 +348,14 @@ export function createPlan(input: CreatePlanInput): LearningPlan {
   db.prepare(
     `UPDATE learning_plans SET status = 'archived', updated_at = ?
      WHERE learner_id = ? AND status IN ('active', 'completed')`,
-  ).run(now, DEFAULT_LEARNER);
+  ).run(now, currentLearnerId());
   db.prepare(
     `INSERT INTO learning_plans
        (plan_id, learner_id, goal, subjects, start_date, days, daily_minutes, status, progress, content, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?)`,
   ).run(
     id,
-    DEFAULT_LEARNER,
+    currentLearnerId(),
     goal,
     JSON.stringify(subjects),
     startDate,
@@ -429,7 +431,9 @@ export function archivePlan(id: string): LearningPlan {
 }
 
 export function deletePlan(id: string): boolean {
-  const result = db.prepare('DELETE FROM learning_plans WHERE plan_id = ?').run(id);
+  const result = db
+    .prepare('DELETE FROM learning_plans WHERE plan_id = ? AND learner_id = ?')
+    .run(id, currentLearnerId());
   return result.changes > 0;
 }
 

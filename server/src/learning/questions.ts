@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
+import { currentLearnerId } from './context.ts';
 
 export interface QuestionRow {
   question_id: string;
   bank_id: string;
+  learner_id: string;
   subject: string | null;
   knowledge_point: string;
   difficulty: string;
@@ -28,14 +30,15 @@ export function saveQuestions(
 ): QuestionRow[] {
   const rows: QuestionRow[] = [];
   const stmt = db.prepare(
-    `INSERT INTO questions (question_id, bank_id, subject, knowledge_point, difficulty, content, options, answer, explanation, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO questions (question_id, bank_id, learner_id, subject, knowledge_point, difficulty, content, options, answer, explanation, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const q of items) {
     const id = randomUUID();
     const row: QuestionRow = {
       question_id: id,
       bank_id: meta.bankId,
+      learner_id: currentLearnerId(),
       subject: meta.subject ?? null,
       knowledge_point: q.knowledge_point?.trim() || meta.knowledgePoint,
       difficulty: meta.difficulty,
@@ -48,6 +51,7 @@ export function saveQuestions(
     stmt.run(
       row.question_id,
       row.bank_id,
+      row.learner_id,
       row.subject,
       row.knowledge_point,
       row.difficulty,
@@ -64,12 +68,14 @@ export function saveQuestions(
 }
 
 export function getQuestion(id: string): QuestionRow | undefined {
-  return db.prepare('SELECT * FROM questions WHERE question_id = ?').get(id) as unknown as QuestionRow | undefined;
+  return db
+    .prepare('SELECT * FROM questions WHERE question_id = ? AND learner_id = ?')
+    .get(id, currentLearnerId()) as unknown as QuestionRow | undefined;
 }
 
 export function listQuestions(filter: { bankId?: string; subject?: string; limit?: number }): QuestionRow[] {
-  const clauses: string[] = [];
-  const values: (string | number)[] = [];
+  const clauses: string[] = ['learner_id = ?'];
+  const values: (string | number)[] = [currentLearnerId()];
   if (filter.bankId) {
     clauses.push('bank_id = ?');
     values.push(filter.bankId);
@@ -88,14 +94,14 @@ export function listBanks(): { bank_id: string; source: string | null; count: nu
   return db
     .prepare(
       `SELECT bank_id, MAX(source) AS source, COUNT(*) AS count, MAX(created_at) AS created_at
-       FROM questions GROUP BY bank_id ORDER BY created_at DESC`,
+       FROM questions WHERE learner_id = ? GROUP BY bank_id ORDER BY created_at DESC`,
     )
-    .all() as unknown as { bank_id: string; source: string | null; count: number; created_at: number }[];
+    .all(currentLearnerId()) as unknown as { bank_id: string; source: string | null; count: number; created_at: number }[];
 }
 
 export function pickRandomQuestions(count: number, bankId?: string, subject?: string): QuestionRow[] {
-  const clauses: string[] = [];
-  const values: (string | number)[] = [];
+  const clauses: string[] = ['learner_id = ?'];
+  const values: (string | number)[] = [currentLearnerId()];
   if (bankId) {
     clauses.push('bank_id = ?');
     values.push(bankId);

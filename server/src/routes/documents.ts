@@ -19,6 +19,8 @@ import {
 } from '../documents/pdf-ocr.ts';
 import { deleteBySource } from '../rag/milvus.ts';
 import { indexDocument } from '../rag/service.ts';
+import { invalidateRagCache } from '../rag/cache.ts';
+import { invalidateAnswerCache } from '../chat/answer-cache.ts';
 
 const documents = new Hono();
 const MAX_BATCH_FILES = 50;
@@ -133,6 +135,7 @@ documents.get('/:id/ocr', (c) => {
 documents.get('/:id/ocr/pages/:page/image', async (c) => {
   const id = c.req.param('id');
   const page = Number(c.req.param('page'));
+  if (!getDocument(id)) return c.json({ code: 'DOCUMENT_NOT_FOUND', message: '文档不存在' }, 404);
   if (!Number.isInteger(page) || page < 1) return c.json({ code: 'PAGE_INVALID', message: '页码无效' }, 400);
   const file = ocrPageImagePath(id, page);
   if (!file) return c.json({ code: 'OCR_PAGE_NOT_FOUND', message: '该页没有原图' }, 404);
@@ -197,6 +200,8 @@ documents.delete('/:id', async (c) => {
   if (!detail) return c.json({ code: 'DOCUMENT_NOT_FOUND', message: '文档不存在' }, 404);
   await deleteBySource(id).catch(() => {});
   deleteDocument(id);
+  invalidateRagCache();
+  invalidateAnswerCache();
   await removeDocumentFile(detail.document);
   return c.json({ deleted: id });
 });

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { currentLearnerId } from './learning/context.ts';
 
 const dataDir = process.env.EDU_DATA_DIR?.trim()
   ? resolve(process.env.EDU_DATA_DIR)
@@ -14,6 +15,7 @@ db.exec(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS documents (
     document_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     filename TEXT NOT NULL,
     file_type TEXT NOT NULL,
     size INTEGER NOT NULL,
@@ -58,6 +60,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS questions (
     question_id TEXT PRIMARY KEY,
     bank_id TEXT NOT NULL,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     subject TEXT,
     knowledge_point TEXT NOT NULL,
     difficulty TEXT NOT NULL,
@@ -123,6 +126,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     type TEXT NOT NULL,
     status TEXT NOT NULL,
     payload TEXT NOT NULL,
@@ -137,6 +141,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS exam_papers (
     exam_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     name TEXT NOT NULL,
     subject TEXT,
     exam_date TEXT,
@@ -176,6 +181,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS courseware (
     courseware_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     title TEXT NOT NULL,
     topic TEXT NOT NULL,
     subject TEXT,
@@ -261,6 +267,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS media (
     media_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     filename TEXT NOT NULL,
     stored_name TEXT NOT NULL,
     mime TEXT NOT NULL,
@@ -298,14 +305,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_learning_plans_learner ON learning_plans(learner_id, status, updated_at);
 
   CREATE TABLE IF NOT EXISTS daily_practices (
-    date TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
     learner_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     total INTEGER NOT NULL,
     status TEXT NOT NULL,
     score REAL,
     created_at INTEGER NOT NULL,
-    finished_at INTEGER
+    finished_at INTEGER,
+    PRIMARY KEY (learner_id, date)
   );
   CREATE INDEX IF NOT EXISTS idx_daily_practices_learner ON daily_practices(learner_id, date);
 
@@ -329,6 +337,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS visualizations (
     visualization_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     type TEXT NOT NULL,
     title TEXT NOT NULL,
     spec TEXT NOT NULL,
@@ -338,6 +347,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS ocr_jobs (
     document_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL DEFAULT 'default',
     engine TEXT NOT NULL,
     status TEXT NOT NULL,
     total_pages INTEGER NOT NULL DEFAULT 0,
@@ -364,6 +374,68 @@ db.exec(`
     PRIMARY KEY (document_id, page)
   );
   CREATE INDEX IF NOT EXISTS idx_ocr_pages_status ON ocr_pages(document_id, status);
+
+  CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    username_norm TEXT NOT NULL UNIQUE,
+    phone TEXT,
+    email TEXT,
+    display_name TEXT,
+    role TEXT NOT NULL DEFAULT 'user',
+    status TEXT NOT NULL DEFAULT 'active',
+    password_hash TEXT NOT NULL,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER,
+    last_login_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    absolute_expires_at INTEGER NOT NULL,
+    ip TEXT,
+    user_agent TEXT,
+    revoked_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
+
+  CREATE TABLE IF NOT EXISTS auth_events (
+    event_id TEXT PRIMARY KEY,
+    user_id TEXT,
+    type TEXT NOT NULL,
+    ip TEXT,
+    user_agent TEXT,
+    result TEXT NOT NULL,
+    detail TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at);
+
+  CREATE TABLE IF NOT EXISTS embedding_cache (
+    cache_key TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    vector TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_embedding_cache_created ON embedding_cache(created_at);
+
+  CREATE TABLE IF NOT EXISTS answer_cache (
+    cache_key TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    citations TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_answer_cache_learner ON answer_cache(learner_id, created_at);
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];
@@ -381,8 +453,58 @@ if (!messageCols.some((c) => c.name === 'visualization_id')) {
   db.exec('ALTER TABLE messages ADD COLUMN visualization_id TEXT');
 }
 
+function hasColumn(table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[];
+  return cols.some((c) => c.name === column);
+}
+
+for (const table of ['documents', 'questions', 'exam_papers', 'courseware', 'media', 'visualizations', 'tasks', 'ocr_jobs']) {
+  if (!hasColumn(table, 'learner_id')) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN learner_id TEXT NOT NULL DEFAULT 'default'`);
+  }
+}
+
+db.exec(`
+  UPDATE visualizations SET learner_id = '__global__' WHERE visualization_id LIKE 'preset:%';
+  UPDATE documents SET hash = learner_id || ':' || hash WHERE instr(hash, ':') = 0;
+  UPDATE media SET hash = learner_id || ':' || hash WHERE instr(hash, ':') = 0;
+  CREATE INDEX IF NOT EXISTS idx_documents_learner ON documents(learner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_questions_learner ON questions(learner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_tasks_learner ON tasks(learner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_exam_papers_learner ON exam_papers(learner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_courseware_learner ON courseware(learner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_media_learner ON media(learner_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_visualizations_learner ON visualizations(learner_id, created_at);
+`);
+
+const dailyCols = db.prepare('PRAGMA table_info(daily_practices)').all() as unknown as { name: string; pk: number }[];
+const dailyPk = dailyCols.filter((c) => c.pk > 0).map((c) => c.name);
+if (dailyPk.length === 1 && dailyPk[0] === 'date') {
+  db.exec(`
+    BEGIN;
+    CREATE TABLE daily_practices_new (
+      date TEXT NOT NULL,
+      learner_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      total INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      score REAL,
+      created_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      PRIMARY KEY (learner_id, date)
+    );
+    INSERT INTO daily_practices_new (date, learner_id, session_id, total, status, score, created_at, finished_at)
+      SELECT date, learner_id, session_id, total, status, score, created_at, finished_at FROM daily_practices;
+    DROP TABLE daily_practices;
+    ALTER TABLE daily_practices_new RENAME TO daily_practices;
+    CREATE INDEX IF NOT EXISTS idx_daily_practices_learner ON daily_practices(learner_id, date);
+    COMMIT;
+  `);
+}
+
 export interface DocumentRow {
   document_id: string;
+  learner_id: string;
   filename: string;
   file_type: string;
   size: number;
@@ -409,6 +531,7 @@ export interface ChunkRow {
 
 export interface OcrJobRow {
   document_id: string;
+  learner_id: string;
   engine: string;
   status: string;
   total_pages: number;
@@ -436,10 +559,11 @@ export interface OcrPageRow {
 
 export function insertDocument(row: Omit<DocumentRow, 'created_at'>): void {
   db.prepare(
-    `INSERT INTO documents (document_id, filename, file_type, size, hash, subject, tags, source_path, status, chunk_count, error, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO documents (document_id, learner_id, filename, file_type, size, hash, subject, tags, source_path, status, chunk_count, error, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.document_id,
+    row.learner_id,
     row.filename,
     row.file_type,
     row.size,
@@ -464,27 +588,37 @@ export function insertChunks(chunks: Omit<ChunkRow, 'indexed'>[]): void {
   }
 }
 
-export function findDocumentByHash(hash: string): DocumentRow | undefined {
-  return db.prepare('SELECT * FROM documents WHERE hash = ?').get(hash) as DocumentRow | undefined;
-}
-
-export function getDocument(id: string): DocumentRow | undefined {
-  return db.prepare('SELECT * FROM documents WHERE document_id = ?').get(id) as DocumentRow | undefined;
-}
-
-export function listDocuments(): DocumentRow[] {
-  return db.prepare('SELECT * FROM documents ORDER BY created_at DESC').all() as unknown as DocumentRow[];
-}
-
-export function listChunks(documentId: string): ChunkRow[] {
+export function findDocumentByHash(hash: string, learnerId = currentLearnerId()): DocumentRow | undefined {
   return db
-    .prepare('SELECT * FROM chunks WHERE document_id = ? ORDER BY seq')
-    .all(documentId) as unknown as ChunkRow[];
+    .prepare('SELECT * FROM documents WHERE hash = ? AND learner_id = ?')
+    .get(hash, learnerId) as unknown as DocumentRow | undefined;
+}
+
+export function getDocument(id: string, learnerId = currentLearnerId()): DocumentRow | undefined {
+  return db
+    .prepare('SELECT * FROM documents WHERE document_id = ? AND learner_id = ?')
+    .get(id, learnerId) as unknown as DocumentRow | undefined;
+}
+
+export function listDocuments(learnerId = currentLearnerId()): DocumentRow[] {
+  return db
+    .prepare('SELECT * FROM documents WHERE learner_id = ? ORDER BY created_at DESC')
+    .all(learnerId) as unknown as DocumentRow[];
+}
+
+export function listChunks(documentId: string, learnerId = currentLearnerId()): ChunkRow[] {
+  return db
+    .prepare(
+      `SELECT c.* FROM chunks c JOIN documents d ON d.document_id = c.document_id
+       WHERE c.document_id = ? AND d.learner_id = ? ORDER BY c.seq`,
+    )
+    .all(documentId, learnerId) as unknown as ChunkRow[];
 }
 
 export function updateDocument(
   id: string,
   patch: { status?: string; chunk_count?: number; error?: string | null },
+  learnerId = currentLearnerId(),
 ): void {
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
@@ -495,13 +629,14 @@ export function updateDocument(
     }
   }
   if (fields.length === 0) return;
-  values.push(id);
-  db.prepare(`UPDATE documents SET ${fields.join(', ')} WHERE document_id = ?`).run(...values);
+  values.push(id, learnerId);
+  db.prepare(`UPDATE documents SET ${fields.join(', ')} WHERE document_id = ? AND learner_id = ?`).run(...values);
 }
 
-export function deleteDocument(id: string): void {
+export function deleteDocument(id: string, learnerId = currentLearnerId()): void {
+  if (!getDocument(id, learnerId)) return;
   db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id);
-  db.prepare('DELETE FROM documents WHERE document_id = ?').run(id);
+  db.prepare('DELETE FROM documents WHERE document_id = ? AND learner_id = ?').run(id, learnerId);
   db.prepare('DELETE FROM ocr_pages WHERE document_id = ?').run(id);
   db.prepare('DELETE FROM ocr_jobs WHERE document_id = ?').run(id);
 }
@@ -522,8 +657,8 @@ export function listOcrJobs(statuses: string[]): OcrJobRow[] {
 export function saveOcrJob(row: Omit<OcrJobRow, 'created_at' | 'updated_at'> & { created_at?: number }): void {
   const now = Date.now();
   db.prepare(
-    `INSERT INTO ocr_jobs (document_id, engine, status, total_pages, done_pages, low_confidence, failed_pages, current_page, error, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO ocr_jobs (document_id, learner_id, engine, status, total_pages, done_pages, low_confidence, failed_pages, current_page, error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(document_id) DO UPDATE SET
        engine = excluded.engine, status = excluded.status, total_pages = excluded.total_pages,
        done_pages = excluded.done_pages, low_confidence = excluded.low_confidence,
@@ -531,6 +666,7 @@ export function saveOcrJob(row: Omit<OcrJobRow, 'created_at' | 'updated_at'> & {
        error = excluded.error, updated_at = excluded.updated_at`,
   ).run(
     row.document_id,
+    row.learner_id,
     row.engine,
     row.status,
     row.total_pages,

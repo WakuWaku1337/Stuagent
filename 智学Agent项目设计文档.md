@@ -4,11 +4,17 @@
 
 | 项目   | 内容                         |
 | ---- | -------------------------- |
-| 文档版本 | v0.26（草案，扫描件 OCR 已落地并补质量校验） |
+| 文档版本 | v0.30（草案，账号方案简化为用户名密码） |
 | 编写日期 | 2026-11-06                 |
+| 修订日期 | 2026-11-08（v0.30）          |
 | 项目代号 | EduPi（中文名 "智学"，可改名）        |
 | 基础框架 | Pi Coding Agent（pi.dev）    |
 | 文档状态 | 待评审                        |
+
+> v0.30 变更：账号方案收敛为“简单账号密码”——注册只填用户名、密码、手机号、邮箱（可选，不验证）；移除邮箱验证码、邮件找回、CAPTCHA、管理员 2FA、邀请码、按账号配额；保留服务端会话、数据隔离、管理员重置密码与上线最低要求。S32–S34 精简，取消 S35。
+> v0.29（历史）：按公网个人网站标准扩展过邮箱验证、邮件 DNS、CAPTCHA、2FA、配额与完整上线清单；因当前只需要简单登录，已在 v0.30 收回。
+
+> v0.28 变更：新增 §5.9 认证架构、§6.16 用户注册登录、§7.3 账号数据表与迁移、§10 账号安全要求、§12 验收项、§13 阶段 K（S32–S34）与第 14 章实施手册；同步调整 §1.2 定位、§1.4 目标用户、§2 用户故事、§3.1 功能清单与 §3.2 功能边界。原 §3.2 “不做多用户”调整为“不做计费、班级管理与教师端，账号与数据隔离纳入本期”。
 
 
 
@@ -32,7 +38,9 @@
 
 ### 1.2 项目定位
 
-智学 Agent 是一个**面向高中生的本地优先、单用户、可长期陪伴的 AI 学习智能体**。它以 Pi 为内核，通过扩展工具、技能（Skill）、MCP 服务和子智能体，把教材资料变成 "会答疑、会出题、会诊断、会复盘" 的个性化私教；前端采用 Vue3 构建，浏览器访问本地服务即可使用。
+智学 Agent 是一个**面向高中生的本地优先、可长期陪伴的 AI 学习智能体**。它以 Pi 为内核，通过扩展工具、技能（Skill）、MCP 服务和子智能体，把教材资料变成 "会答疑、会出题、会诊断、会复盘" 的个性化私教；前端采用 Vue3 构建，浏览器访问本地服务即可使用。
+
+部署形态以公网个人网站为生产目标：账号使用简单的用户名 + 密码，注册时可填手机号、邮箱作为联系信息，不发送验证码；保留 HTTPS、数据隔离、管理员重置密码、基本限流与每日备份。也保留本地单机模式用于开发与家庭内使用。
 
 ### 1.3 项目目标
 
@@ -52,9 +60,11 @@
 
 
 
-* 主要用户：高中阶段学生（单用户、个人电脑使用）。
+* 主要用户：高中阶段学生（单机单账号，或多账号实例中的一名学生）。
 
-* 次要用户：家长（查看学习情况）、教师（后续可扩展备课能力，本期不做）。
+* 公开访客：用用户名 + 密码直接注册，手机号与邮箱仅作联系信息。
+
+* 次要用户：家长（后续查看学习情况，本期不做）、教师（后续可扩展备课能力，本期不做）、实例管理员（管理账号与模型配置，不读取他人学习内容）。
 
 
 
@@ -75,6 +85,8 @@
 | US-07 | 拍照答疑  | 作为学生，我希望拍一道题的照片就能识别并讲解。                                        |
 | US-08 | 交互课件  | 作为学生，我希望把几何 / 化学难点生成可交互的 3D 课件帮助理解。                            |
 | US-09 | 考试复盘  | 作为学生，我希望考完拍照上传整卷，自动识别题目、作答与批改分数，生成逐题分析、错因归类和提分建议的复盘报告，并自动收录错题。 |
+| US-10 | 账号与隔离 | 作为学生，我希望注册并登录自己的账号，只看到自己的资料、对话、错题与掌握度；作为管理员，我希望控制谁能注册，并能重置密码或停用账号。 |
+| US-11 | 简单注册与维护 | 作为访客，我希望用用户名和密码快速注册，手机号/邮箱只作联系方式；作为管理员，我希望建号、停用账号和重置密码，不需要邮件验证码。 |
 
 
 
@@ -102,12 +114,17 @@
 | 交互课件   | 几何 / 化学 3D 交互 HTML 课件              | P2  | edulab                 |
 | 解题视频   | 中文配音、双语字幕解题视频                      | P2  | edulab                 |
 | 安全治理   | 防注入、输出过滤、隐私脱敏                      | P2  | SuperAgent（安全 SDK）     |
+| 账号与认证  | 用户名密码注册登录、手机号/邮箱联系信息、会话管理、按账号隔离学习数据、管理员建号/停用/重置密码 | P1（公网部署必需） | 自研（会话 Cookie + scrypt） |
 
 ### 3.2 功能边界（本期不做）
 
 
 
-* 多用户、班级管理、登录计费等 SaaS 能力。
+* 多用户 SaaS 的计费、班级管理、教师端与家长独立账号；本期只做账号注册登录与个人数据隔离，不做组织架构和付费能力。
+
+* 第三方登录（OAuth/SSO）、短信验证、邮箱验证码、邮件找回密码、CAPTCHA、管理员 2FA；本期只用用户名 + 密码，手机号/邮箱仅作联系信息。
+
+* 按账号用量配额与邀请码；本期用注册开关、登录限流与现有月预算控制成本。
 
 * 教师备课、家校沟通平台。
 
@@ -129,12 +146,12 @@
 
 | 维度         | Pi（内核派）                              | 平台化框架（Dify/SuperAgent 类） | 本项目适配       |
 | ---------- | ------------------------------------ | ------------------------ | ----------- |
-| 形态         | 极简内核 + Tool/Skill/MCP/ 子 Agent       | 后端 + 数据库 + 队列 + Web 仪表盘  | 单用户本地，Pi 更轻 |
+| 形态         | 极简内核 + Tool/Skill/MCP/ 子 Agent       | 后端 + 数据库 + 队列 + Web 仪表盘  | 小规模本地，Pi 更轻 |
 | 部署         | 本地 CLI/TUI，文件持久化                     | docker-compose 多服务，运维重   | Pi 胜出       |
 | 定制深度       | 教学逻辑自由扩展                             | 受平台抽象约束                  | Pi 胜出       |
 | 复用成本       | 原生支持 Skill 与 MCP，可直接复用 edulab/Hermes | 需按平台规范改造                 | Pi 胜出       |
 | 本地模型       | 系统提示精简，本地模型友好、成本低                    | 资源占用高                    | Pi 胜出       |
-| 多用户 / SaaS | 需自行实现                                | 开箱即用                     | 本期不需要       |
+| 多用户 / SaaS | 需自行实现                                | 开箱即用                     | 本期自研轻量账号与数据隔离，不做 SaaS |
 
 ### 4.3 尽职调查说明（重要事实）
 
@@ -160,6 +177,10 @@
 | 前端框架      | Vue3 + Vite + TypeScript                                       |
 | 前端生态      | Pinia、Vue Router、Element Plus、Axios、KaTeX、ECharts              |
 | 后端服务      | Node.js + Hono（内嵌 Pi，提供 REST + SSE；可替换 Express）                |
+| 认证        | 自研服务端会话（HttpOnly Cookie）+ Node `crypto.scrypt` 密码哈希；不引入 JWT/OAuth 依赖 |
+| 反代与 TLS  | Caddy（自动 HTTPS）或 Nginx + Let's Encrypt；应用层限流 |
+| 生产部署      | Linux VPS + Docker Compose；应用、Milvus、Docling 分服务 |
+| 监控与备份    | 健康检查 + 外部 uptime；SQLite/uploads 每日备份 |
 
 
 
@@ -392,7 +413,7 @@ flowchart TD
 
 
 
-1. DSH Super-agent 面向多渠道（群聊 / GitHub / 邮件）、高并行、长期在线的软件开发协作；本项目是**单用户、本地、学习场景，不做多信道接入，Router 简化为本地协调器**。
+1. DSH Super-agent 面向多渠道（群聊 / GitHub / 邮件）、高并行、长期在线的软件开发协作；本项目是**小规模、本地优先的学习场景（默认单账号）**，不做多信道接入，Router 简化为本地协调器。
 
 2. 学习多为串行，双层架构的主要价值在**上下文隔离 + 长程可续任务**，而非高并发。
 
@@ -563,7 +584,7 @@ flowchart TD
 
 * 混合检索：dense、sparse 各发一个 AnnSearchRequest（各 limit 50），用 RRFRanker (k=60) 融合出粗排 50 条，再交应用层 Cross-Encoder 取精排 Top 5–10。
 
-* 分区策略：单用户数据量有限，**不强制分区**，用 subject/chapter 标量字段过滤即可；确需物理隔离再按学科建 Partition（Lite 不支持分区）。
+* 分区策略：单个账号数据量有限，**不强制分区**，用 subject/chapter 标量字段过滤即可；确需物理隔离再按学科建 Partition（Lite 不支持分区）。
 
 #### 5.7.9 建表 Schema 示例（Node SDK，结构化示意）
 
@@ -714,6 +735,10 @@ flowchart TD
 | 考试复盘页 | 上传整卷、复盘报告、历史趋势         |
 | 计划页   | 学习计划查看与调整              |
 | 课件页   | 3D 交互 HTML 课件（iframe）  |
+| 登录 / 注册页 | 用户名密码登录、注册（手机号/邮箱可选）、首次管理员初始化 |
+| 账号页   | 修改密码、活跃会话、退出所有设备 |
+| 账号管理页 | 管理员建号、启停、改角色/联系方式、重置密码、审计、上线检查 |
+| 隐私 / 协议页 | 隐私政策、用户协议、联系方式 |
 
 #### 5.8.3 通信方式
 
@@ -724,6 +749,64 @@ flowchart TD
 * **SSE**：对话流式输出，逐字返回（P0）。
 
 * **WebSocket**：后台任务、可续任务的事件推送（P1）。
+
+### 5.9 认证与多账号架构
+
+认证放在 HTTP 入口层统一完成，业务服务不自行解析 Cookie；通过中间件把当前 `user_id / learner_id / role` 放进请求上下文，个人数据查询必须带账号范围。这样避免每个路由各写一套校验，也避免漏掉 SSE、文件下载、WebSocket 等非 REST 入口。
+
+```mermaid
+flowchart TD
+    B["浏览器（Vue3 SPA）"]
+    Proxy["Caddy / Nginx：HTTPS、限流"]
+
+    subgraph AUTH["认证入口"]
+        Login["/api/auth/login /register"]
+        Guard{"requireAuth 中间件"}
+        Ctx["RequestContext：userId / learnerId / role"]
+    end
+
+    subgraph DOMAIN["业务服务"]
+        Chat["对话 / SSE"]
+        Docs["资料 / RAG"]
+        Learn["出题 / 错题 / 掌握度 / 复盘"]
+        Media["媒体 / 可视化 / 后台任务"]
+    end
+
+    subgraph ADMIN["管理员能力"]
+        AdminApi["/api/admin/*"]
+        Global["模型密钥 / MCP / 存储配置（全局）"]
+    end
+
+    users[("users")]
+    sessions[("sessions")]
+    db[("SQLite：个人数据按 learner_id 隔离")]
+    milvus[("Milvus：每账号独立 collection")]
+
+    B --> Proxy
+    Proxy -->|"未登录"| Login
+    Proxy -->|"Cookie：edu_session"| Guard
+    Login --> users
+    Login --> sessions
+    Guard -->|401| Login
+    Guard -->|"通过"| Ctx
+    Ctx --> Chat & Docs & Learn & Media
+    Chat & Docs & Learn & Media --> db
+    Docs --> milvus
+    B -->|"管理员"| AdminApi
+    AdminApi --> users
+    AdminApi --> Global
+```
+
+关键约束：
+
+* 登录态使用服务端会话 + `HttpOnly` Cookie，不在前端保存 token；会话可随时撤销。
+* 公网流量必须经过反向代理终止 HTTPS，应用端口不直接暴露；限流与上传大小在代理层和应用层各做一层。
+* 注册默认关闭，只能由管理员建号；设置 `REGISTRATION_OPEN=1` 才开放公开注册。本期不发送邮箱验证码，手机号/邮箱只作联系信息。
+* 管理员重置密码是唯一找回方式；重置密码、改角色等高风险操作必须审计。
+* 个人数据统一以 `learner_id = user_id` 归属；不引入第二套 owner 字段。
+* 模型密钥、Provider 配置、MCP、存储配额属于实例级资源，仅管理员可读写；普通用户只能使用，不能查看密钥。
+* 管理员默认不能读取他人的对话、资料、错题与复盘内容，只可管理账号状态、邀请与聚合用量。
+* SSE `/api/chat`、文件下载、WebSocket `/ws` 必须与 REST 走同一套会话校验，事件只推送给任务所属账号。
 
 
 
@@ -850,7 +933,7 @@ $P(L_{t+1}) = P(L_t\mid obs) + (1-P(L_t\mid obs))P(T)$
 
 
 
-* 单用户数据少，冷启动先用保守经验先验，随答题在线更新。
+* 单个学习者数据少，冷启动先用保守经验先验，随答题在线更新。
 
 * 数据积累后用观测序列拟合（MLE/EM 或网格搜索），可先借用题库全局先验再做个体调整。
 
@@ -1094,23 +1177,37 @@ flowchart TD
 | 公式 OCR | pix2tex(LaTeX-OCR)、UniMERNet | 公式转 LaTeX | 数学公式 |
 | 视觉大模型 | GPT-4o / Qwen-VL / Gemini 整页识别 | 排版、表格、公式结构好，直接出 Markdown | 复杂版面（本资料推荐） |
 
-本实现默认走视觉大模型（本资料推荐）：提示词要求保留标题/段落/列表/表格、公式转 LaTeX、插图标注 `[图]`，直接产出 Markdown；本地 RapidOCR/PaddleOCR 作为可选的隐私离线路径（`scripts/rapidocr_bridge.py`），未安装时自动回退视觉模型；本地识别置信度低或公式密度高时也会升级到视觉模型。公式转 LaTeX 由视觉模型统一完成，无需单独的 pix2tex/UniMERNet 服务。
-
 **工程与前端：**
 
 - 多页 OCR 异步执行，复用可续任务与 WS 进度，结果缓存不重复识别；文本页直接提取、图片页 OCR 混合处理。
 - 质量校验：按 OCR 平均置信度逐页打分，低于阈值的页面标记待校对，提供原文图与识别文本对照的人工校对界面，校对后写回。
 - 前端检测到图片型 PDF 时提示"扫描件将进行 OCR，需几分钟"，显示进度与低置信页校对入口。
 
-**本版本落地（v0.26，2026-11-08）：**
+**同类开源方案与选型：**
 
-- 判定：逐页提取文本 + OperatorList 大图覆盖率；单页正文少于 30 字且整页图片覆盖 ≥ 40% 记为需 OCR，需 OCR 页达到 50% 即判为图片型 PDF 并进入异步任务；文本充足页仍直接提取（混合处理）。
-- 渲染：`pdfjs-dist` + `@napi-rs/canvas`，默认 200 DPI（`OCR_DPI`，150–320），页面 JPEG 存 `uploads/ocr/<document_id>/page-xxxx.jpg`，同时供 OCR 与人工校对。
-- 引擎：`OCR_ENGINE=auto|vision|local`。`auto` 优先本地 RapidOCR（`server/scripts/rapidocr_bridge.py`，需 `python -m pip install rapidocr onnxruntime`），不可用或结果不可靠时用视觉模型；视觉模型直接输出 Markdown + LaTeX，覆盖公式与复杂版面。
-- 质量分：逐页置信度 = 模型自评 + 乱码/重复/“无法识别”惩罚 + 图像清晰度上限（拉普拉斯高频能量/灰度对比度，防模糊页虚高），默认阈值 0.8（`OCR_CONFIDENCE_THRESHOLD`）；低于阈值或识别为空/失败标记待校对。
-- 任务：`ocr_jobs` / `ocr_pages` 落库；服务重启恢复 queued/running 任务，已完成页与已确认页直接复用；`OCR_CONCURRENCY`（默认 2）并发识别，`OCR_TIMEOUT_MS`（默认 180s）单页超时。
-- 接口：`GET /api/documents/:id/ocr`（进度与逐页结果）、`GET /api/documents/:id/ocr/pages/:page/image`（原文图）、`PUT /api/documents/:id/ocr/pages/:page`（校对保存/标记已校对）、`POST /api/documents/:id/ocr/confirm`（重新切片并灌库）、`POST /api/documents/:id/ocr/retry`（重跑）。
-- 前端：图片型 PDF 上传返回 202 + `ocr_queued`；资料列表显示“待 OCR / OCR 中 / 待校对”、页数进度条与校对入口；校对弹层左侧原文图、右侧 Markdown 编辑，全部低置信页标记后“写回并重新入库”。
+端到端文档解析（扫描件 OCR + 版面/表格/公式 → Markdown）：
+
+| 项目 | 维护方 | Star（约） | 协议 | 特点 |
+|---|---|---|---|---|
+| MinerU | OpenDataLab | 83k | 基于 Apache-2.0 | 中文/公式强，CPU/GPU 可跑 |
+| Docling | IBM | 70k | MIT | 格式广、OCR 可插拔、CPU 友好、有 Rust 版 |
+| Marker | Datalab | 40k | 权重有商业限制 | 准确率高、速度快 |
+| Surya / Nougat | 社区 / Meta | — | 注意授权 | 多语言 OCR；学术文档 |
+
+组件级 OCR / 公式：
+
+| 项目 | 定位 | 协议 |
+|---|---|---|
+| PaddleOCR | 百度，中文 OCR 强、手写/公式 | Apache-2.0（模型版权归百度） |
+| RapidOCR | PaddleOCR ONNX 轻量版，Windows 简单 | Apache-2.0 |
+| pix2tex / UniMERNet | 公式图片转 LaTeX | 开源 |
+
+最终选型（含后续上线个人网站）：**Docling**
+
+- **协议可商用**：Docling 与 docling-serve 均为 MIT；官方镜像内置 RapidOCR（PP-OCR，Apache-2.0），官方确认随附模型无研究专用/非商用限制、非受限基座微调，整体上线无法律风险。
+- **部署轻**：官方提供 CPU Docker 镜像（docling-serve-cpu，FastAPI，端口 5001），支持 RQ（Redis+worker）横向扩展，可部署云主机或 Railway 等平台，不强制 GPU。
+- **能力全**：覆盖 PDF/Office/HTML/图片/扫描，OCR 可插拔（默认 RapidOCR，中文可用），版面、表格、公式结构化输出 Markdown/JSON，直接对接 RAG。
+- **备选与排除**：MinerU 仅在公式要求极高且有 GPU 时作局部增强；Marker/Surya 因权重商业授权不用于上线。
 
 ### 6.9 模型与密钥管理
 
@@ -1697,6 +1794,144 @@ flowchart TD
 
 借助 6.10 用量统计的 latency\_ms，持续监控首字延迟与端到端 P50/P95，按数据验证每项优化的实际收益。
 
+### 6.16 用户注册登录
+
+#### 6.16.1 目标与边界
+
+目标：提供简单的账号密码登录，让一个实例可以由多名学生使用。注册时填写手机号、邮箱作为联系信息，不做验证码、不做邮箱验证、不做第三方登录。登录后只看到自己的资料、对话、错题、复盘与用量；管理员能建号、停用账号和重置密码。
+
+本期不做：邮箱/短信验证码、邮件找回密码、OAuth/SSO、管理员 2FA、CAPTCHA、邀请码、按账号配额。找回密码由管理员或本机 CLI 重置。共享资料库/题库不在本期。
+
+#### 6.16.2 账号模型与部署模式
+
+* 账号表 `users`，角色只有 `admin` 与 `user`。第一个创建的账号自动成为管理员。
+* 一个账号对应一名学习者：`users.user_id` 与 `learners.learner_id` 一对一，个人数据继续使用现有 `learner_id` 字段归属，不新增第二套归属字段。
+* 注册默认关闭，只能由管理员建号；设置 `REGISTRATION_OPEN=1` 才开放公开注册。
+* 管理员建号使用 `npm run user:create`，首次登录必须修改临时密码；忘记密码用 `npm run auth:reset`。
+* 首次管理员必须通过 `npm run auth:bootstrap` 在本机创建，或显式设置 `AUTH_BOOTSTRAP=1` 且仅允许本机访问注册页。禁止在公网默认开放“第一个注册的人成为管理员”。
+* 手机号、邮箱仅作联系信息，不验证、不唯一、不作为登录凭据；登录只用用户名 + 密码。
+
+#### 6.16.3 注册与登录
+
+* 注册字段：用户名、密码、手机号（可选）、邮箱（可选）、显示名（可选）。不收集真实姓名和学校信息。
+* 用户名 3–32 字符，只允许字母、数字、下划线和中划线，大小写不敏感唯一；显示名 1–32 字符。
+* 密码 10–128 字符，允许长口令与空格，不强制大小写/符号组合；不得与用户名相同。前端提供强度提示。
+* 密码使用 Node 内置 `crypto.scrypt` 派生（N=32768、r=8、p=1、16 字节随机盐、32 字节摘要，显式设置 `maxmem=64MB`），存储格式 `scrypt$N$r$p$salt$hash`，比较使用恒定时间函数；不引入原生加密依赖，Windows 与 Docker 均可直接运行。
+* 登录失败统一返回“用户名或密码错误”，不区分账号是否存在；注册重名返回 409。
+* 登录成功后轮换新会话；同一账号允许多个设备会话，默认最多 10 个，超出时撤销最旧会话。
+* 管理员重置密码：生成临时密码、设置 `must_change_password=1`，不自动登录，审计记录操作人；这是本期唯一的找回密码方式。
+* 注册与登录接口都做频率限制；密码、会话 token 明文不得写入日志、错误信息或审计详情。
+
+#### 6.16.4 会话与登录态
+
+* 会话 token 为 32 字节随机值；HTTPS 部署使用 `__Host-edu_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`，无 Domain），本地 HTTP 使用 `edu_session`（不加 `Secure`）。
+* 数据库只存 token 的 SHA-256 摘要，不存明文；服务端可随时撤销单个会话或全部会话。
+* 默认空闲有效期 7 天、绝对有效期 30 天；`last_seen_at` 最多每 10 分钟更新一次，避免频繁写库。
+* 退出登录删除当前会话并清 Cookie；“退出所有设备”删除该账号全部会话。
+* CSRF 防护：SameSite=Lax + 对 POST/PUT/PATCH/DELETE 校验 `Origin`/`Referer` 与实例同源。默认不开放跨域前端。
+* 未登录访问 API 返回 401 JSON；SPA 路由跳转登录页并保留 `redirect` 参数。SSE 与 WebSocket 同样校验会话，WebSocket 未授权以关闭码 4401 结束。
+
+#### 6.16.5 权限与数据隔离
+
+| 资源 | 归属 | 隔离方式 |
+| --- | --- | --- |
+| 对话、消息、记忆、错题、掌握度、测验、考试复盘、学习计划、每日练习 | 个人 | `learner_id = user_id` |
+| 资料、题库、试卷、媒体、可视化、后台任务（切片等子资源随父资源） | 个人 | 新增 `learner_id` 字段，所有查询带当前账号 |
+| 用量记录 | 个人明细 / 管理员聚合 | `learner_id` 归属；管理员只看汇总与成本，不看内容 |
+| 模型设置、Provider 密钥、MCP 服务、存储配额 | 实例全局 | 仅管理员读写；普通用户不可见密钥 |
+| 账号、会话、认证审计 | 账号体系 | 管理员管理账号；本人可管理自己的会话 |
+
+* 管理员默认不能打开他人的对话、资料、错题与复盘；需要家长监护或教师查看时，另立功能并单独授权，不混入本期。
+* 管理员重置密码等同于可接管账号，属于高权限操作，必须审计。
+* 禁止停用或降级最后一个管理员，避免实例失去管理入口。
+* 访问他人资源统一返回 404，避免通过状态码探测资源是否存在。
+* 禁止业务代码继续使用全局常量 `DEFAULT_LEARNER`；改为从请求上下文取 `learnerId` 并显式传参。回归脚本增加静态检查，发现新增的 `DEFAULT_LEARNER` 直接失败。
+* Milvus 按账号使用独立 collection（如 `edu_chunks_<user_id>`；首个账号沿用旧 `edu_chunks` 以兼容已有向量），从存储层避免漏加过滤条件导致跨账号检索。
+* 媒体、OCR 原文图、资料原文件等下载接口必须先从数据库确认归属，再读磁盘；不能只凭路径或 id 直接返回文件。
+* 后台任务与 WebSocket 事件按 `learner_id` 路由，只推送给任务所属账号；管理员不能订阅他人任务内容。
+
+#### 6.16.6 接口设计
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | /api/auth/bootstrap | 公开 | 是否已完成初始化、是否开放注册 |
+| POST | /api/auth/register | 公开（受注册开关控制） | 注册并建立会话 |
+| POST | /api/auth/login | 公开 | 登录并建立会话 |
+| POST | /api/auth/logout | 登录 | 退出当前会话 |
+| GET | /api/auth/me | 登录 | 当前账号、角色、是否需改密 |
+| PUT | /api/auth/password | 登录 | 修改自己的密码，撤销其他会话 |
+| GET | /api/auth/sessions | 登录 | 活跃会话列表 |
+| DELETE | /api/auth/sessions/{id} | 登录 | 撤销指定会话 |
+| POST | /api/auth/sessions/revoke-all | 登录 | 退出所有设备 |
+| GET | /api/admin/users | 管理员 | 账号列表、状态、最近登录 |
+| POST | /api/admin/users | 管理员 | 创建账号并生成临时密码 |
+| PUT | /api/admin/users/{id} | 管理员 | 启用/停用、调整角色、改显示名、改手机号/邮箱 |
+| POST | /api/admin/users/{id}/reset-password | 管理员 | 生成临时密码并强制改密 |
+| GET | /api/admin/audit | 管理员 | 登录与管理员操作审计 |
+
+错误约定：401 未登录或会话过期；403 权限不足；409 用户名已存在或未完成初始化；422 密码策略不满足；429 频率限制（返回 `Retry-After`）。
+
+#### 6.16.7 前端交互
+
+* 新增 `/login`、`/register`、`/account` 页面；除登录/注册外，路由统一标记 `requiresAuth`。
+* 注册页只收集用户名、密码、手机号、邮箱、显示名；手机号/邮箱明确提示“仅作联系方式，不验证”。
+* 账号页提供修改密码、活跃设备、退出所有设备；管理员从侧栏进入 `/admin` 账号管理页。
+* 应用启动先请求 `/api/auth/me` 再挂载受保护路由，避免先闪出页面再跳登录；401 拦截器清除本地账号状态并跳转 `/login?redirect=...`。
+* 未登录时不要探测业务接口（首页的 `/api/model`、错题提醒、任务 WebSocket 等全部延后到登录成功后启动），避免登录页出现 401 报错与重连噪音。
+* `/admin` 账号管理页提供账号列表、创建账号、启停、改角色/联系方式、重置密码、认证审计与上线检查；普通用户不显示该入口，直接访问会被重定向。
+* 模型设置、MCP、存储治理页仅管理员可进入；用量页普通用户只看自己的记录，管理员可查看聚合与成本，但不能查看他人对话内容。
+* SSE 请求与 WebSocket 使用同源 Cookie；收到 401/4401 时停止重连并跳转登录。
+
+#### 6.16.8 安全要求
+
+* 公网部署必须 HTTPS；反向代理传递 `X-Forwarded-Proto`，服务端据此设置 `Secure` Cookie。
+* 登录失败默认 5 次/15 分钟锁定 15 分钟，按账号 + 来源 IP 计数；管理员或 CLI 可解锁。注册默认 10 次/小时/IP。
+* 认证审计记录登录成功/失败、注册、改密、管理员操作、会话撤销；只记录账号 id、时间、IP、User-Agent 与结果，不记录密码或 token。
+* 会话 Cookie 不参与前端 JS 读取；前端不把 token 写入 localStorage。
+* 密码哈希、会话摘要不得通过任何接口回传；错误响应不包含堆栈与数据库细节。
+* 本期不提供自助找回密码；管理员重置是唯一路径，必须在页面上说明。
+* 仅测试环境允许 `AUTH_ENABLED=0` 绕过登录，且启动时打印醒目警告；生产环境检测到该值直接拒绝启动。
+* 备份与迁移包含 `users/sessions` 表；恢复后建议撤销全部会话，防止旧 Cookie 继续可用。
+
+#### 6.16.9 配置项
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| AUTH_ENABLED | 1 | 关闭仅用于隔离测试，生产禁止 |
+| AUTH_BOOTSTRAP | 0 | 允许本机首次注册成为管理员 |
+| REGISTRATION_OPEN | 0 | 默认关闭；设为 1 才开放公开注册，关闭后仅管理员建号 |
+| SESSION_TTL_DAYS | 7 | 空闲有效期 |
+| SESSION_ABSOLUTE_DAYS | 30 | 绝对有效期 |
+| SESSION_MAX_PER_USER | 10 | 单账号最大会话数 |
+| COOKIE_SECURE | auto | auto 按请求协议；也可强制 1/0 |
+| LOGIN_MAX_FAILURES | 5 | 触发锁定的失败次数 |
+| LOGIN_WINDOW_MIN | 15 | 失败计数窗口 |
+| LOGIN_LOCK_MIN | 15 | 锁定时长 |
+| TRUST_PROXY | 1 | 信任反向代理的转发头，仅在有可信代理时开启 |
+
+#### 6.16.10 验收标准
+
+1. 首次初始化后可用管理员登录；关闭注册后公开注册接口返回 403。
+2. 注册只需用户名、密码、手机号/邮箱（可留空）；不发送验证码，注册后可直接登录。
+3. 登录、刷新、退出、修改密码、退出所有设备均生效；Cookie 为 HttpOnly，前端读不到 token。
+4. 用户 A 无法通过列表、详情、下载、SSE、WebSocket 获取用户 B 的任何个人数据；越权请求返回 404。
+5. 连续错误密码达到阈值后返回 429/锁定，窗口结束或管理员解锁后可正常登录；错误信息不泄露账号是否存在。
+6. 管理员可创建/停用/启用账号、修改联系信息、重置密码并强制改密；不能读取他人对话、资料与复盘内容。
+7. 现有 `default` 学习者数据迁移后完整归属首个管理员，数量与内容不变；RAG 检索只返回本账号资料。
+8. 认证开启后原有回归脚本与前端页面全部通过；SSE 对话、文件上传、OCR 校对、后台任务、WebSocket 推送均带登录态正常工作。
+9. 公网部署通过 HTTPS、Secure Cookie 与每日备份检查；关闭注册时新用户无法注册。
+
+### 6.17 上线最低要求
+
+本期账号以“简单可用”为目标，不引入邮件验证、CAPTCHA、2FA 和按账号配额。做到以下几条即可上线；后续需要再逐项加。
+
+* 绑定域名并使用 HTTPS（Caddy 自动证书或 Nginx + Let's Encrypt），只开放 80/443，应用端口不直接暴露。
+* 反向代理与应用双层限流；注册默认关闭，需要时通过 `REGISTRATION_OPEN=1` 开放。
+* 每日备份 SQLite、uploads 与 `.env`：运行 `npm run backup`（可加 `-- --with-uploads`），备份写入 `data/backups/`；每月至少做一次恢复检查，恢复后撤销全部会话。
+* 配置外部 uptime 与磁盘/内存告警；日志不记录密码、Cookie、token。
+* 提供 `/privacy`、`/terms` 与联系方式；大陆节点需完成 ICP 备案。
+* 管理员使用强口令，生产环境不存在默认密码；演示账号上线前删除。
+* 本期不做：邮箱验证码、邮件找回、CAPTCHA、管理员 2FA、邀请码、按账号用量配额；需要时在后续迭代补齐。
 
 
 ***
@@ -1709,6 +1944,9 @@ flowchart TD
 
 ```mermaid
 erDiagram
+    USER ||--|| LEARNER : "profile"
+    USER ||--o{ SESSION : "owns"
+    USER ||--o{ INVITE : "creates"
     LEARNER ||--o{ MEMORY : has
     LEARNER ||--o{ QUIZ_SESSION : takes
     LEARNER ||--o{ WRONG_RECORD : owns
@@ -1841,7 +2079,45 @@ erDiagram
         string attachments
         datetime created_at
     }
+    USER {
+        string user_id PK
+        string username
+        string username_norm
+        string email
+        string email_norm
+        datetime email_verified_at
+        string display_name
+        string role
+        string status
+        string password_hash
+        int must_change_password
+        int totp_enabled
+        datetime terms_accepted_at
+        datetime deleted_at
+        datetime created_at
+        datetime last_login_at
+    }
+    SESSION {
+        string session_id PK
+        string user_id FK
+        string token_hash
+        datetime created_at
+        datetime last_seen_at
+        datetime expires_at
+        datetime absolute_expires_at
+        datetime revoked_at
+    }
+    INVITE {
+        string invite_id PK
+        string code_hash
+        string created_by FK
+        int max_uses
+        int used_count
+        datetime expires_at
+    }
 ```
+
+> 图中只画了账号相关的核心实体；资料、切片、题库、媒体、可视化、后台任务等个人资源统一通过 `learner_id = user_id` 归属，详见 7.3 的隔离矩阵。
 
 ### 7.2 存储策略
 
@@ -1853,6 +2129,50 @@ erDiagram
 
 * 全部数据默认仅存本地，不上传；云端模型仅在调用时发送必要内容。
 
+### 7.3 账号数据表与迁移
+
+#### 7.3.1 认证相关表
+
+| 表 | 关键字段 | 说明 |
+| --- | --- | --- |
+| users | user_id、username、username_norm、phone、email、display_name、role、status、password_hash、must_change_password、failed_count、locked_until、last_login_at、created_at、updated_at | 账号主表；username_norm 唯一；手机号/邮箱仅联系信息 |
+| sessions | session_id、user_id、token_hash、created_at、last_seen_at、expires_at、absolute_expires_at、ip、user_agent、revoked_at | 服务端会话；token 只存摘要 |
+| auth_events | event_id、user_id、type、ip、user_agent、result、detail、created_at | 登录与管理员操作审计，不含密码与 token |
+
+索引：`users(username_norm)` 唯一；`sessions(token_hash)` 唯一、`sessions(user_id, expires_at)`；`auth_events(created_at)`。
+
+#### 7.3.2 个人资源归属
+
+现有已带 `learner_id` 的表直接复用，值改为当前 `user_id`：memories、wrong_records、mastery、quiz_sessions、usage_records、conversations、learning_plans、daily_practices。
+
+需要新增 `learner_id NOT NULL` 的表：documents、questions、exam_papers、courseware、media、visualizations、tasks。以下表不单独加字段，通过父资源判断归属：chunks（document）、quiz_answers（quiz_session）、exam_questions / exam_reviews（exam_paper）、messages（conversation）、ocr_jobs / ocr_pages（document）。
+
+实例级表不加 `learner_id`，仅管理员可操作：model_settings、provider_keys、mcp_servers、storage_cleanups。
+
+预置可视化保持全局只读：固定 id 为 `preset:<id>` 的记录归属用 `learner_id='__global__'` 标记，所有账号可读；用户生成的可视化写自己的 `learner_id`，生成、删除、列表均校验归属。
+
+多账号前必须处理两个旧约束：
+
+* `daily_practices.date` 原为主键，两个账号同一天会冲突；改为 `(learner_id, date)` 联合主键。
+* `documents.hash` 原为全局唯一；实现按账号写入 `learner_id:sha256`，查询同时带账号，达到按账号去重，无需重建表。
+
+#### 7.3.3 迁移步骤
+
+1. 备份 `edu.db`、`uploads/`、Milvus 数据目录，记录各表行数。
+2. 建 users / sessions / auth_events 表；如 users 已存在则补 phone、email、must_change_password、failed_count、locked_until 等列。
+3. 用 `ALTER TABLE ... ADD COLUMN learner_id TEXT NOT NULL DEFAULT 'default'` 给需要归属的表加列并回填；旧 documents/media 的 hash 补上 `default:` 前缀。
+4. 重建 `daily_practices`（联合主键 `learner_id, date`）：建新表、复制数据、校验行数、替换旧表；完成后执行 `PRAGMA foreign_key_check`。
+5. 首个管理员 `user_id` 固定为 `default`，沿用现有数据；同时在 learners 表补一条 `learner_id='default'` 的记录。后续每创建一个账号，同步插入对应 learners 行。
+6. Milvus：首个账号沿用旧 collection `edu_chunks`，新账号使用 `edu_chunks_<sanitized_user_id>`；`npm run auth:migrate -- --reindex` 可强制重建向量，正常迁移不需要重跑。
+7. 媒体与 OCR 原文件继续放共享目录，数据库补归属；下载接口先查归属再读文件，禁止直接暴露路径。
+8. 业务代码改用请求上下文取 `learnerId`，删除 `DEFAULT_LEARNER`；回归脚本增加静态检查。
+9. 跑 `npm run auth:check` 与 `npm run auth:isolation`，验证 A/B 账号的资料、对话、媒体、RAG、任务互不可见。
+
+#### 7.3.4 回滚与兼容
+
+* 迁移前备份可整体恢复；新增列对旧代码无副作用。
+* 紧急情况下本机可临时 `AUTH_ENABLED=0` 绕过登录排查问题，生产环境禁止，启动时检测到即拒绝。
+* 旧版脚本若未带登录态，统一在测试环境使用 `AUTH_ENABLED=0` 或测试账号登录，不把绕过开关带进生产。
 
 
 ***
@@ -1865,6 +2185,7 @@ erDiagram
 | ------ | -------- | -------------------------------------------------------------------------- | ----- |
 | P0 MVP | 跑通最小学习闭环 | Node 本地服务 + Vue3 前端（对话 / 错题 / 出题页面）+ 记忆画像、错题本、出题 3 个工具 + 1 个 RAG MCP       | 数天    |
 | P1     | 完整学习与诊断  | 前端完整页面（模考 / 复盘 / 掌握度）、题库提取、模考、BKT 掌握度、4 个子智能体、拍照答疑、考试复盘、Router/Worker 双层编排 | 1–2 周 |
+| P1.5   | 账号与多用户   | 用户名密码注册登录、手机号/邮箱联系信息、服务端会话、首个管理员、按账号隔离数据与文件、管理员建号/停用/重置密码 | 1–2 周 |
 | P2     | 体验增强与安全  | edulab 交互课件、解题视频、安全 MCP、事件驱动后台与 Watchdog                                   | 数周    |
 
 
@@ -1904,8 +2225,27 @@ erDiagram
 
 * 生产运行：`npm run build` 构建前端，由后端托管，浏览器访问本地端口。
 
+* 首次初始化：`npm run auth:bootstrap` 创建管理员；未初始化时登录页提示先执行该命令。公网部署必须 HTTPS，并在反向代理层确认 `X-Forwarded-Proto`。
+
 * 扩展调试：`pi -e ./src/index.ts` 可单独快速测试扩展逻辑。
 
+### 9.4 公网部署最低配置
+
+```mermaid
+flowchart TD
+    U["互联网用户"] --> DNS["域名 / DNS"]
+    DNS --> Proxy["Caddy 或 Nginx：HTTPS"]
+    Proxy --> App["Node 应用（Hono + Pi）"]
+    App --> DB[("SQLite + uploads 卷")]
+    App --> Milvus[("Milvus Standalone")]
+    App --> Docling["docling-serve（可选）"]
+```
+
+* 资源：仅对话/资料/出题用 2 vCPU / 4GB / 60GB；含扫描件 OCR 用 4 vCPU / 8GB / 80GB，并配置 2GB swap。
+* 端口：只暴露 80/443；应用 3000、Milvus 19530、Docling 5001 只监听内网或 Docker 网络；SSH 用密钥登录。
+* 配置：`.env` 权限 600，生产 `AUTH_ENABLED=1`、`COOKIE_SECURE=1`、`TRUST_PROXY=1`；首次管理员用 `npm run auth:bootstrap` 创建，不设默认密码。
+* 发布：备份 → 构建/拉镜像 → 迁移 → 启动 → `/health` 通过 → 冒烟（登录、对话、检索、上传）；失败回滚上一版本与数据库备份。
+* 备份、监控与合规的最低要求见 §6.17；邮件验证、CAPTCHA、2FA、按账号配额本期不配置。
 
 
 ***
@@ -1922,6 +2262,20 @@ erDiagram
 
 4. 最小上传：调用云端模型时仅发送必要上下文，敏感信息先脱敏。
 
+5. 账号安全：密码用 scrypt 加盐哈希；登录失败限流与短期锁定；会话使用 HttpOnly Cookie 并支持随时撤销；不在前端保存 token。
+
+6. 越权防护：所有个人数据查询带 `learner_id`；管理员不能读取他人学习内容；越权访问统一返回 404；文件下载先查归属再读盘。
+
+7. 公网部署：必须 HTTPS 与 Secure Cookie；注册默认关闭，只在确认数据隔离后按需设置 `REGISTRATION_OPEN=1`；首次管理员只允许本机 CLI 创建，禁止公网抢占。
+
+8. 审计与日志：记录登录、注册、改密、重置、会话撤销与管理员操作；日志不含密码、会话 token 与模型密钥。
+
+9. 测试开关：`AUTH_ENABLED=0` 仅限隔离测试环境，生产启动检测到即拒绝；备份与恢复后撤销全部会话。
+
+10. 传输与浏览器安全：强制 HTTPS；会话 Cookie 使用 `HttpOnly` 与 `__Host-` 前缀；反向代理与应用双层限流。
+
+11. 成本与滥用：用注册开关、登录限流和现有月度预算控制；本期不引入邮箱验证、CAPTCHA、2FA 或按账号配额。
+
 
 
 ***
@@ -1937,12 +2291,16 @@ erDiagram
 | 解题视频工作量大    | 涉及 TTS 与渲染管线               | 优先接外部 MCP，不早期自研             |
 | 本地模型能力受限    | 小模型在复杂推理上较弱                | 关键任务可切换云端模型，混合使用            |
 | 框架演进风险      | 依赖 Pi 与 MCP 生态             | 关注官方仓库活跃度，核心逻辑与框架解耦         |
+| 公网滥用与模型成本   | 公开注册可能被刷号、刷 token，直接消耗 API 额度 | 注册开关 + 登录限流 + 现有月预算；发现异常可关闭注册或停用账号 |
+| 未成年人合规      | 目标用户含高中生，公开收集个人信息有监护人同意要求 | 最小化收集；隐私政策与协议；无法落实监护人同意时只做家庭部署 |
+| 单机运维风险      | 磁盘、内存、Docling 峰值导致服务不可用或数据丢失 | 资源余量、swap、磁盘/内存告警、每日备份与恢复演练 |
+| SQLite 并发上限   | 多账号同时长任务写入可能锁等待          | WAL、短事务、单 Worker；规模增长后再评估 PostgreSQL |
 
 
 
 ***
 
-## 12. 验收标准（P0 MVP）
+## 12. 验收标准（P0 MVP + 公网上线）
 
 
 
@@ -1958,13 +2316,23 @@ erDiagram
 
 6. 可通过浏览器访问 Vue3 前端，完成一次流式对话并看到引用来源。
 
+7. 可注册/登录并保持登录态；未登录访问受保护页面自动跳转登录，退出后旧会话立即失效。
+
+8. 两个账号的数据、文件、对话与后台事件互相不可见；管理员可建号、停用账号、重置密码，但读不到他人学习内容。
+
+9. 现有 `default` 数据迁移后完整归属首个管理员；RAG 检索、媒体下载与 WebSocket 推送均按账号隔离。
+
+10. 注册只需用户名、密码和可选手机号/邮箱，不发送验证码；关闭注册后新用户无法注册。
+
+11. 公网部署通过 HTTPS、Secure Cookie 与每日备份检查；隐私政策、用户协议与联系方式可访问。
+
 
 
 ***
 
 ## 13. 多轮对话实施计划
 
-本项目无法在一次对话内完成，按 "**每次对话只做一个可独立验收的小闭环**" 拆分为 8 个阶段、18 次对话，严格按依赖推进。
+本项目无法在一次对话内完成，按 "**每次对话只做一个可独立验收的小闭环**" 拆分为 A–K 多个阶段，任务编号以 13.4 表为准，严格按依赖推进。
 
 ### 13.1 总体原则
 
@@ -2008,10 +2376,14 @@ flowchart LR
     F --> G["G 考试复盘"]
     G --> H["H 进阶安全收尾"]
     H --> I["I 多模态体验增强"]
-    I --> J["J 性能优化压测"]
+    I --> J["J 扩展与体验收尾"]
+    I --> K["K 账号与多用户"]
+    J --> K
 ```
 
 ### 13.4 对话任务表
+
+> S23（性能优化与压测）属于阶段 I；J 为仓库扩展批次（S24–S31）；K 为本次新增的账号体系（S32–S34）。仓库扩展批次已使用 S24–S31（学习计划、回复完整性、每日练习、文件夹导入、难度校准、MCP、自动可视化、3D 课件），账号体系从 S32 起编号，避免撞号。
 
 **阶段 A：环境与骨架**
 
@@ -2101,6 +2473,16 @@ flowchart LR
 
 > 提速为贯穿性要求：P0 措施（流式、快模型、精简上下文）自 S04 起即执行，S23 集中优化与压测。
 
+**阶段 K：账号与多用户（新增）**
+
+
+
+| 编号  | 主题         | 目标与产出                                                                 | 验收                     | 前置  |
+| --- | ---------- | --------------------------------------------------------------------- | ---------------------- | --- |
+| S32 | 账号认证与登录页   | users/sessions/auth_events 表、scrypt 密码、用户名密码注册（手机号/邮箱可选）、登录/退出/me、HttpOnly 会话、路由守卫、首个管理员初始化 | 可注册登录、刷新保持登录、退出即失效 | S18 |
+| S33 | 多账号数据隔离与迁移 | 个人资源补 learner_id、请求上下文替换 DEFAULT_LEARNER、Milvus 分账号 collection、文件与 SSE/WS 归属、迁移脚本 | A/B 账号互不可见，旧 default 数据完整迁移 | S32 |
+| S34 | 账号管理与会话安全 | 管理员建号/停用/改角色、登录限流与锁定、会话管理、管理员重置密码、审计、HTTPS 与备份最低检查 | 账号管理可用，越权测试与全量回归通过 | S33 |
+
 ### 13.5 里程碑与裁剪
 
 
@@ -2116,6 +2498,8 @@ flowchart LR
 * 里程碑 5（S22）：多模态输入、语音与历史会话体验完善。
 
 * 里程碑 6（S23）：响应延迟达标（TTFT/P95），语义缓存生效。
+
+* 里程碑 7（S34）：账号注册登录与数据隔离生效，完成 HTTPS、备份与基本账号管理，可按个人网站上线。
 
 * D、E 两阶段可并行；时间紧时 S17 可视化、S14 WebSocket 可后置，S23 性能压测与功能开发迭代进行。
 
@@ -2237,11 +2621,9 @@ flowchart LR
 
 6. 按 500–800 字、overlap 50–100 切片，附 source/chapter/page 元数据。
 
-* 产出：`server/src/documents/` 解析模块（`parsers.ts`、`service.ts`、`chunker.ts`、`pdf-ocr.ts`，含 OCR 兜底与校对标记）。
+* 产出：document.ts 解析模块（含 OCR 兜底与校对标记）。
 
 * 验收：四类文件及扫描件均可解析，切片正确带元数据，低置信页有校对入口。
-
-* 实现（2026-11-08）：图片型 PDF 判定、200 DPI 逐页渲染、视觉/本地 OCR、逐页置信度与待校对标记、异步进度、原文图对照校对与写回重新入库均已落地；验收脚本 `server/scripts/check-ocr.ts` ALL PASS，测试样本 `server/testdata/scanned-sample.pdf`（2 页全位图，第 2 页模糊低置信）。
 
 #### S06 Milvus 灌库
 
@@ -2573,7 +2955,58 @@ flowchart LR
 
 * 验收：TTFT/P95 达标，缓存命中可秒回（性能里程碑）。
 
+### 阶段 K：账号与多用户
 
+#### S32 账号认证与登录页
+
+* 目标：先把“用户名密码注册、登录、退出”跑通，不碰业务数据。
+
+* 步骤：
+
+1. 在 `server/src/store.ts` 增加 users / sessions / auth_events 表与索引；`users.user_id` 允许固定为 `default`，便于后续迁移。
+2. 新增 `server/src/auth/`：scrypt 哈希与校验、会话签发/校验/撤销、登录限流与锁定。
+3. 新增 `server/src/routes/auth.ts`：bootstrap、register、login、logout、me、password、sessions。
+4. 在 `server/src/index.ts` 增加 `requireAuth` 中间件，挂在 `/api/*` 与 `/ws` 上；放行 `/health`、`/api/auth/*` 和静态资源。
+5. 后端提供 `npm run auth:bootstrap`（本机创建管理员）与 `auth:reset`（管理员重置密码）脚本；未初始化时登录页给出提示。
+6. 前端新增 `/login`、`/register`、`/account` 页面；注册只收集用户名、密码、手机号、邮箱、显示名；在 `web/src/router/index.ts` 增加 `requiresAuth` 元信息与全局守卫；`web/src/api/http.ts` 增加 401 拦截与跳转。
+7. 未登录时不探测业务接口，避免登录页出现 401 噪音；SSE 与 WebSocket 接入同一套会话校验，收到 401/4401 停止重连并跳登录。
+
+* 产出：账号表、认证服务、登录/注册/账号页、路由守卫、初始化与重置脚本。
+
+* 验收：注册只需用户名密码和可选手机号/邮箱，不发验证码即可登录；刷新保持登录；退出后旧 Cookie 调用 `/api/auth/me` 返回 401；错误密码达到阈值返回 429；前端读不到会话 token。
+
+#### S33 多账号数据隔离与迁移
+
+* 目标：让第二个账号看不到第一个账号的任何个人数据。
+
+* 步骤：
+
+1. 给 documents、questions、exam_papers、courseware、media、visualizations、tasks 增加 `learner_id`；重建 `daily_practices` 联合主键与 `documents` 的 `(learner_id, hash)` 唯一约束；其余个人表复用现有 `learner_id`。
+2. 删除全局 `DEFAULT_LEARNER`，所有服务改为从请求上下文取当前 `learnerId`；列表、详情、更新、删除全部带归属条件。
+3. Milvus 改为每账号独立 collection，检索、灌库、删除都使用当前账号 collection；旧数据迁入首个管理员的 collection。
+4. 媒体、OCR 原文图、资料原文件的下载与删除先查归属；后台任务与 WebSocket 事件按账号路由。
+5. 编写 `scripts/auth-migrate.ts`：备份、加列、回填 `default`、建管理员、重建 Milvus collection；编写 `scripts/check-auth.ts` 做 A/B 账号越权测试。
+6. 回归脚本统一使用测试账号登录；仅测试环境允许 `AUTH_ENABLED=0`。
+
+* 产出：数据归属迁移、按账号检索与文件访问、隔离测试脚本。
+
+* 验收：A/B 两账号的对话、资料、错题、掌握度、用量、媒体、可视化、后台任务互不可见；直接改 URL 访问他人资源返回 404；旧 `default` 数据数量与内容不变；RAG 只召回本账号资料。
+
+#### S34 账号管理与会话安全
+
+* 目标：完成管理员建号、停用、重置密码与基础会话安全，具备上线条件。
+
+* 步骤：
+
+1. 增加管理员接口与页面：账号列表、创建账号、启用/停用、角色调整、改手机号/邮箱、重置密码并强制改密、审计查询。
+2. 完成登录限流、锁定、审计事件；错误信息统一化，避免账号枚举；禁止停用/降级最后一个管理员。
+3. 增加会话列表与撤销、退出所有设备；修改密码后撤销其他会话。
+4. 增加注册开关 `REGISTRATION_OPEN` 与 HTTPS/Secure Cookie/每日备份的上线检查；不引入邮件、CAPTCHA、2FA 或按账号配额。
+5. 补充 `check-auth.ts`：锁定与解锁、管理员越权读取、会话撤销、注册开关、审计字段不含敏感信息。
+
+* 产出：管理员页面与接口、登录限流、会话管理、管理员重置密码、账号安全回归。
+
+* 验收：管理员可建号/停用/改角色/重置密码但不能读取他人内容；关闭注册后新用户无法注册；锁定与解锁符合配置；全量回归与前端构建通过；HTTPS 与备份检查通过。
 
 ***
 

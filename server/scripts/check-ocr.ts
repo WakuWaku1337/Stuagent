@@ -16,6 +16,7 @@ interface OcrPage {
   page: number;
   status: string;
   confidence: number;
+  engine: string | null;
   markdown: string;
   image_url: string | null;
 }
@@ -90,6 +91,7 @@ async function main() {
   });
   if (!ocr.job || ocr.job.status !== 'done') throw new Error(`OCR 任务失败: ${ocr.job?.error ?? 'unknown'}`);
   console.log(`PASS 多页 OCR 完成 (${ocr.job.done_pages}/${ocr.job.total_pages} 页)`);
+  console.log(`  engines: ${ocr.pages.map((page) => `p${page.page}:${page.engine ?? '-'}(${page.confidence})`).join(' ')}`);
 
   const pageOne = ocr.pages.find((page) => page.page === 1);
   const lowPages = ocr.pages.filter((page) => page.status === 'review' || page.status === 'failed');

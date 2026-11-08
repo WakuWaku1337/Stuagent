@@ -16,8 +16,12 @@ import {
   Setting,
   Timer,
   TrendCharts,
+  UserFilled,
 } from '@element-plus/icons-vue';
 import type { Component } from 'vue';
+
+import { computed } from 'vue';
+import { useAuthStore } from '../stores/auth';
 
 defineEmits<{ navigate: [] }>();
 
@@ -25,6 +29,7 @@ interface NavItem {
   to: string;
   label: string;
   icon: Component;
+  adminOnly?: boolean;
 }
 
 const groups: { label: string; items: NavItem[] }[] = [
@@ -57,13 +62,26 @@ const groups: { label: string; items: NavItem[] }[] = [
   {
     label: '系统',
     items: [
+      { to: '/admin', label: '账号管理', icon: UserFilled, adminOnly: true },
       { to: '/usage', label: '用量统计', icon: DataLine },
-      { to: '/storage', label: '存储治理', icon: FolderOpened },
-      { to: '/mcp', label: 'MCP 扩展', icon: Connection },
-      { to: '/settings', label: '模型设置', icon: Setting },
+      { to: '/storage', label: '存储治理', icon: FolderOpened, adminOnly: true },
+      { to: '/mcp', label: 'MCP 扩展', icon: Connection, adminOnly: true },
+      { to: '/settings', label: '模型设置', icon: Setting, adminOnly: true },
     ],
   },
 ];
+
+const auth = useAuthStore();
+const visibleGroups = computed(() =>
+  groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (item) => !item.adminOnly || !auth.enabled || auth.user?.role === 'admin',
+      ),
+    }))
+    .filter((group) => group.items.length > 0),
+);
 
 const route = useRoute();
 
@@ -83,7 +101,7 @@ function isActive(to: string) {
     </router-link>
 
     <nav class="nav" aria-label="主导航">
-      <div v-for="group in groups" :key="group.label" class="nav-group">
+      <div v-for="group in visibleGroups" :key="group.label" class="nav-group">
         <p class="nav-group-label">{{ group.label }}</p>
         <router-link
           v-for="item in group.items"

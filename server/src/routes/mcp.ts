@@ -11,8 +11,10 @@ import {
   type McpExposure,
   type McpTransport,
 } from '../mcp/service.ts';
+import { requireAdmin } from '../auth/middleware.ts';
 
 const mcp = new Hono();
+mcp.use('*', requireAdmin);
 
 function errorResponse(c: Context, error: unknown) {
   if (error instanceof McpError) {

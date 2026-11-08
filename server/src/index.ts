@@ -9,6 +9,10 @@ import { Hono } from 'hono';
 import { cancelTask, enqueue, getTask, listTasks, startQueue, taskEvents, type TaskType } from './tasks/queue.ts';
 import { getModelInfo } from './pi.ts';
 import documents from './routes/documents.ts';
+import authRoutes from './routes/auth.ts';
+import adminRoutes from './routes/admin.ts';
+import { requireAuth, websocketUser } from './auth/middleware.ts';
+import { authEnabled } from './auth/service.ts';
 import learning from './routes/learning.ts';
 import reviews from './routes/reviews.ts';
 import courseware from './routes/courseware.ts';
@@ -32,30 +36,44 @@ const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const envPath = resolve(serverRoot, '.env');
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 
+if (process.env.NODE_ENV === 'production' && !authEnabled()) {
+  throw new Error('生产环境禁止 AUTH_ENABLED=0');
+}
+
 const app = new Hono();
+app.use('/api/*', requireAuth);
 const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
-const wsClients = new Set<{ send: (data: string) => void; readyState: number }>();
+const wsClients = new Set<{ ws: { send: (data: string) => void; readyState: number }; learnerId: string }>();
 
 app.get(
   '/ws',
-  upgradeWebSocket(() => ({
-    onOpen(_evt, ws) {
-      wsClients.add(ws);
-      ws.send(JSON.stringify({ type: 'connected', at: Date.now() }));
-    },
-    onClose(_evt, ws) {
-      wsClients.delete(ws);
-    },
-    onMessage(evt, ws) {
-      if (typeof evt.data === 'string' && evt.data === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
-    },
-  })),
+  upgradeWebSocket((c) => {
+    const user = authEnabled() ? websocketUser(c.req.header('cookie') ?? null) : null;
+    return {
+      onOpen(_evt, ws) {
+        if (authEnabled() && !user) {
+          ws.close(4401, 'unauthorized');
+          return;
+        }
+        wsClients.add({ ws, learnerId: user?.user_id ?? 'default' });
+        ws.send(JSON.stringify({ type: 'connected', at: Date.now() }));
+      },
+      onClose(_evt, ws) {
+        for (const client of wsClients) {
+          if (client.ws === ws) wsClients.delete(client);
+        }
+      },
+      onMessage(evt, ws) {
+        if (typeof evt.data === 'string' && evt.data === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+      },
+    };
+  }),
 );
 
 taskEvents.on('task', (task) => {
   const data = JSON.stringify({ type: 'task', task });
   for (const client of wsClients) {
-    if (client.readyState === 1) client.send(data);
+    if (client.ws.readyState === 1 && client.learnerId === task.learner_id) client.ws.send(data);
   }
 });
 
@@ -93,6 +111,8 @@ app.get('/api/model', async (c) => {
   }
 });
 
+app.route('/api/auth', authRoutes);
+app.route('/api/admin', adminRoutes);
 app.route('/api/documents', documents);
 app.route('/api', learning);
 app.route('/api/reviews', reviews);

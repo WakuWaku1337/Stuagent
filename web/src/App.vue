@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Menu } from '@element-plus/icons-vue';
+import { ArrowDown, Menu, SwitchButton, User } from '@element-plus/icons-vue';
 import { ElNotification } from 'element-plus';
 import SideNav from './components/SideNav.vue';
 import { api } from './api/data';
+import { useAuthStore } from './stores/auth';
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const navOpen = ref(false);
 const online = ref<boolean | null>(null);
 const modelLabel = ref('');
 const dueReviews = ref(0);
+
+const isPublic = computed(() => route.meta.public === true);
+const userInitial = computed(() => (auth.user?.display_name || auth.user?.username || '?').slice(0, 1).toUpperCase());
 
 const title = computed(() => (route.meta.title as string | undefined) ?? '学习台');
 const subtitle = computed(() => (route.meta.subtitle as string | undefined) ?? '');
@@ -61,18 +66,52 @@ function remindReviews() {
   });
 }
 
-onMounted(() => {
+function startProbe() {
+  if (timer) return;
   void probe();
   timer = setInterval(probe, 30000);
-});
+}
 
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
-});
+function stopProbe() {
+  if (!timer) return;
+  clearInterval(timer);
+  timer = undefined;
+}
+
+watch(
+  [() => auth.ready, () => auth.enabled, () => auth.user?.user_id],
+  () => {
+    stopProbe();
+    if (!auth.ready) return;
+    if (auth.enabled && !auth.user) {
+      online.value = null;
+      modelLabel.value = '';
+      dueReviews.value = 0;
+      return;
+    }
+    startProbe();
+  },
+  { immediate: true },
+);
+
+async function onUserCommand(command: string): Promise<void> {
+  if (command === 'account') {
+    await router.push('/account');
+    return;
+  }
+  if (command === 'logout') {
+    await auth.logout();
+    await router.replace('/login');
+  }
+}
+
+onBeforeUnmount(stopProbe);
 </script>
 
 <template>
-  <div class="shell">
+  <div v-if="!auth.ready" class="boot-screen">正在加载账号状态…</div>
+  <router-view v-else-if="isPublic" />
+  <div v-else class="shell">
     <aside class="rail">
       <SideNav />
     </aside>
@@ -115,6 +154,25 @@ onBeforeUnmount(() => {
             <span class="status-text">{{ statusText }}</span>
           </span>
         </el-tooltip>
+        <el-dropdown v-if="auth.user" trigger="click" @command="onUserCommand">
+          <button class="user-pill" type="button" aria-label="账号菜单">
+            <span class="user-avatar">{{ userInitial }}</span>
+            <span class="user-name">{{ auth.user.display_name || auth.user.username }}</span>
+            <el-icon><ArrowDown /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="account">
+                <el-icon><User /></el-icon>
+                账号
+              </el-dropdown-item>
+              <el-dropdown-item command="logout" divided>
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </header>
 
       <main class="canvas" :class="{ 'is-chat': isChat }">
@@ -135,6 +193,58 @@ onBeforeUnmount(() => {
   color: var(--warning);
   font-size: 11.5px;
   white-space: nowrap;
+}
+
+.boot-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: #8a94a8;
+  font-size: 13px;
+  background: #f5f7fb;
+}
+
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 5px;
+  border: 1px solid #e3e8f2;
+  border-radius: 999px;
+  background: #fff;
+  color: #38445c;
+  cursor: pointer;
+}
+
+.user-pill:hover {
+  border-color: #c9d4ea;
+  background: #f8faff;
+}
+
+.user-avatar {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef3ff;
+  color: #2f5bea;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.user-name {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .user-name {
+    display: none;
+  }
 }
 
 .nav-drawer .el-drawer__body {

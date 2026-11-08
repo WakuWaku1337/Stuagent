@@ -3,6 +3,29 @@ import { readFile } from 'node:fs/promises';
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 let failures = 0;
 
+const AUTH_USER = process.env.AUTH_USER;
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
+if (AUTH_USER && AUTH_PASSWORD) {
+  const login = await fetch(BASE + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: AUTH_USER, password: AUTH_PASSWORD }),
+  });
+  if (!login.ok) {
+    console.error(`登录失败（${login.status}），请检查 AUTH_USER / AUTH_PASSWORD`);
+    process.exit(1);
+  }
+  const cookie = (login.headers.getSetCookie?.()[0] ?? login.headers.get('set-cookie') ?? '').split(';')[0];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    if (cookie) headers.set('cookie', cookie);
+    return originalFetch(input, { ...init, headers });
+  }) as typeof fetch;
+} else {
+  console.log('提示：认证开启时请设置 AUTH_USER / AUTH_PASSWORD；隔离测试可让服务端使用 AUTH_ENABLED=0');
+}
+
 async function check(name: string, fn: () => Promise<boolean | string>): Promise<void> {
   try {
     const result = await fn();

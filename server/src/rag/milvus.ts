@@ -1,7 +1,15 @@
 import { DataType, MetricType, MilvusClient } from '@zilliz/milvus2-sdk-node';
+import { currentLearnerId } from '../learning/context.ts';
 
-export const COLLECTION = 'edu_chunks';
 export const DIM = 1024;
+export const LEGACY_COLLECTION = 'edu_chunks';
+
+export function collectionFor(learnerId = currentLearnerId()): string {
+  // 旧版本只有一个 collection，全部数据属于 default；保留它作为首个账号的集合，避免强制重建向量。
+  if (learnerId === 'default') return LEGACY_COLLECTION;
+  const safe = learnerId.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 120);
+  return `edu_chunks_${safe || 'default'}`;
+}
 
 let client: MilvusClient | null = null;
 export function milvus(): MilvusClient {
@@ -11,64 +19,66 @@ export function milvus(): MilvusClient {
   return client;
 }
 
-let ensured: Promise<void> | null = null;
+const ensured = new Map<string, Promise<void>>();
 
-export function ensureCollection(): Promise<void> {
-  if (!ensured) {
-    ensured = (async () => {
-      const c = milvus();
-      const exists = await c.hasCollection({ collection_name: COLLECTION });
-      if (exists.value) return;
-      await c.createCollection({
-        collection_name: COLLECTION,
-        schema: [
-          { name: 'chunk_id', data_type: DataType.VarChar, is_primary_key: true, max_length: 100 },
-          {
-            name: 'text',
-            data_type: DataType.VarChar,
-            max_length: 65535,
-            enable_analyzer: true,
-            enable_match: true,
-            analyzer_params: { tokenizer: 'jieba', filter: ['cnalphanumonly'] },
-          },
-          { name: 'sparse_vector', data_type: DataType.SparseFloatVector },
-          { name: 'dense_vector', data_type: DataType.FloatVector, dim: DIM },
-          { name: 'subject', data_type: DataType.VarChar, max_length: 32 },
-          { name: 'source_id', data_type: DataType.VarChar, max_length: 100 },
-          { name: 'source_name', data_type: DataType.VarChar, max_length: 256 },
-          { name: 'chapter', data_type: DataType.VarChar, max_length: 256 },
-          { name: 'page', data_type: DataType.Int64 },
-          { name: 'created_at', data_type: DataType.Int64 },
-        ],
-        functions: [
-          {
-            name: 'bm25',
-            type: 'BM25',
-            input_field_names: ['text'],
-            output_field_names: ['sparse_vector'],
-          },
-        ],
-        index_params: [
-          {
-            field_name: 'dense_vector',
-            index_type: 'HNSW',
-            metric_type: MetricType.COSINE,
-            params: { M: 16, efConstruction: 200 },
-          },
-          {
-            field_name: 'sparse_vector',
-            index_type: 'SPARSE_INVERTED_INDEX',
-            metric_type: 'BM25',
-          },
-        ],
-      });
-      await c.loadCollection({ collection_name: COLLECTION });
-    })().catch((e) => {
-      ensured = null;
-      throw e;
+export function ensureCollection(learnerId = currentLearnerId()): Promise<void> {
+  const collection = collectionFor(learnerId);
+  const existing = ensured.get(collection);
+  if (existing) return existing;
+  const promise = (async () => {
+    const c = milvus();
+    const exists = await c.hasCollection({ collection_name: collection });
+    if (exists.value) return;
+    await c.createCollection({
+      collection_name: collection,
+      schema: [
+        { name: 'chunk_id', data_type: DataType.VarChar, is_primary_key: true, max_length: 100 },
+        {
+          name: 'text',
+          data_type: DataType.VarChar,
+          max_length: 65535,
+          enable_analyzer: true,
+          enable_match: true,
+          analyzer_params: { tokenizer: 'jieba', filter: ['cnalphanumonly'] },
+        },
+        { name: 'sparse_vector', data_type: DataType.SparseFloatVector },
+        { name: 'dense_vector', data_type: DataType.FloatVector, dim: DIM },
+        { name: 'subject', data_type: DataType.VarChar, max_length: 32 },
+        { name: 'source_id', data_type: DataType.VarChar, max_length: 100 },
+        { name: 'source_name', data_type: DataType.VarChar, max_length: 256 },
+        { name: 'chapter', data_type: DataType.VarChar, max_length: 256 },
+        { name: 'page', data_type: DataType.Int64 },
+        { name: 'created_at', data_type: DataType.Int64 },
+      ],
+      functions: [
+        {
+          name: 'bm25',
+          type: 'BM25',
+          input_field_names: ['text'],
+          output_field_names: ['sparse_vector'],
+        },
+      ],
+      index_params: [
+        {
+          field_name: 'dense_vector',
+          index_type: 'HNSW',
+          metric_type: MetricType.COSINE,
+          params: { M: 16, efConstruction: 200 },
+        },
+        {
+          field_name: 'sparse_vector',
+          index_type: 'SPARSE_INVERTED_INDEX',
+          metric_type: 'BM25',
+        },
+      ],
     });
-  }
-  return ensured;
+    await c.loadCollection({ collection_name: collection });
+  })().catch((e) => {
+    ensured.delete(collection);
+    throw e;
+  });
+  ensured.set(collection, promise);
+  return promise;
 }
 
 export interface ChunkVector {
@@ -83,11 +93,11 @@ export interface ChunkVector {
   created_at: number;
 }
 
-export async function insertVectors(rows: ChunkVector[]): Promise<void> {
+export async function insertVectors(rows: ChunkVector[], learnerId = currentLearnerId()): Promise<void> {
   if (rows.length === 0) return;
-  await ensureCollection();
+  await ensureCollection(learnerId);
   await milvus().insert({
-    collection_name: COLLECTION,
+    collection_name: collectionFor(learnerId),
     data: rows.map((r) => ({
       chunk_id: r.chunk_id,
       text: r.text,
@@ -100,13 +110,13 @@ export async function insertVectors(rows: ChunkVector[]): Promise<void> {
       created_at: r.created_at,
     })),
   });
-  await milvus().flush({ collection_names: [COLLECTION] });
+  await milvus().flush({ collection_names: [collectionFor(learnerId)] });
 }
 
-export async function deleteBySource(sourceId: string): Promise<void> {
-  await ensureCollection();
+export async function deleteBySource(sourceId: string, learnerId = currentLearnerId()): Promise<void> {
+  await ensureCollection(learnerId);
   await milvus().delete({
-    collection_name: COLLECTION,
+    collection_name: collectionFor(learnerId),
     filter: `source_id == "${sourceId.replace(/"/g, '')}"`,
   });
 }
@@ -122,11 +132,17 @@ export interface SearchHit {
   score: number;
 }
 
-export async function hybridRecall(query: string, dense: number[], limit = 50, subject?: string): Promise<SearchHit[]> {
-  await ensureCollection();
+export async function hybridRecall(
+  query: string,
+  dense: number[],
+  limit = 50,
+  subject?: string,
+  learnerId = currentLearnerId(),
+): Promise<SearchHit[]> {
+  await ensureCollection(learnerId);
   const expr = subject ? `subject == "${subject.replace(/"/g, '')}"` : undefined;
   const res = await milvus().search({
-    collection_name: COLLECTION,
+    collection_name: collectionFor(learnerId),
     data: [
       {
         anns_field: 'dense_vector',

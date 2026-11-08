@@ -1,6 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import { useAuthStore } from '../stores/auth';
 
 const HomeView = () => import('../views/HomeView.vue');
+const LoginView = () => import('../views/LoginView.vue');
+const RegisterView = () => import('../views/RegisterView.vue');
+const AccountView = () => import('../views/AccountView.vue');
+const AdminView = () => import('../views/AdminView.vue');
 const PlanView = () => import('../views/PlanView.vue');
 const ChatView = () => import('../views/ChatView.vue');
 const DocumentsView = () => import('../views/DocumentsView.vue');
@@ -16,10 +21,28 @@ const StorageView = () => import('../views/StorageView.vue');
 const McpView = () => import('../views/McpView.vue');
 const VisualizeView = () => import('../views/VisualizeView.vue');
 
-export default createRouter({
+const router = createRouter({
   history: createWebHistory(),
   scrollBehavior: () => ({ top: 0 }),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: LoginView,
+      meta: { public: true, title: '登录', subtitle: '' },
+    },
+    {
+      path: '/register',
+      name: 'register',
+      component: RegisterView,
+      meta: { public: true, title: '注册', subtitle: '' },
+    },
+    {
+      path: '/account',
+      name: 'account',
+      component: AccountView,
+      meta: { title: '账号', subtitle: '账号信息、密码与登录设备' },
+    },
     {
       path: '/',
       name: 'home',
@@ -85,10 +108,16 @@ export default createRouter({
       redirect: (to) => ({ path: '/visualize', query: to.query }),
     },
     {
+      path: '/admin',
+      name: 'admin',
+      component: AdminView,
+      meta: { title: '账号管理', subtitle: '账号、角色、会话与认证审计', adminOnly: true },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: SettingsView,
-      meta: { title: '模型设置', subtitle: 'Provider、密钥、思考强度与生成参数' },
+      meta: { title: '模型设置', subtitle: 'Provider、密钥、思考强度与生成参数', adminOnly: true },
     },
     {
       path: '/usage',
@@ -100,13 +129,13 @@ export default createRouter({
       path: '/storage',
       name: 'storage',
       component: StorageView,
-      meta: { title: '存储治理', subtitle: '图片与资料占用、配额告警与孤儿文件回收' },
+      meta: { title: '存储治理', subtitle: '图片与资料占用、配额告警与孤儿文件回收', adminOnly: true },
     },
     {
       path: '/mcp',
       name: 'mcp',
       component: McpView,
-      meta: { title: 'MCP 扩展', subtitle: '接入本地或远程 MCP，发现并授权工具' },
+      meta: { title: 'MCP 扩展', subtitle: '接入本地或远程 MCP，发现并授权工具', adminOnly: true },
     },
     {
       path: '/visualize',
@@ -116,3 +145,29 @@ export default createRouter({
     },
   ],
 });
+
+router.beforeEach(async (to) => {
+  const auth = useAuthStore();
+  if (!auth.ready) await auth.bootstrap();
+
+  if (to.meta.public === true) {
+    if (auth.enabled && auth.user && (to.name === 'login' || to.name === 'register')) {
+      return { name: 'home' };
+    }
+    return true;
+  }
+
+  if (!auth.enabled) return true;
+  if (!auth.user) {
+    return { name: 'login', query: { redirect: to.fullPath } };
+  }
+  if (auth.user.must_change_password && to.name !== 'account') {
+    return { name: 'account' };
+  }
+  if (to.meta.adminOnly === true && auth.user.role !== 'admin') {
+    return { name: 'home' };
+  }
+  return true;
+});
+
+export default router;

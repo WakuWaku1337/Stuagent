@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
 import { getSettings } from '../settings/store.ts';
+import { currentLearnerId } from '../learning/context.ts';
 
 export interface UsageInput {
   provider: string;
@@ -52,9 +53,10 @@ export function recordUsage(input: UsageInput): void {
       `INSERT INTO usage_records
        (usage_id, learner_id, provider, model, scenario, subject, prompt_tokens, completion_tokens,
         total_tokens, reasoning_tokens, latency_ms, cost, success, error, key_id, created_at)
-       VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       randomUUID(),
+      currentLearnerId(),
       input.provider,
       input.model,
       input.scenario,
@@ -79,7 +81,15 @@ function since(days: number): number {
   return Date.now() - Math.max(1, days) * 86_400_000;
 }
 
-export function usageSummary(days = 30) {
+function learnerClause(learnerId?: string): string {
+  return learnerId ? ' AND learner_id = ?' : '';
+}
+
+function learnerParams(learnerId?: string): string[] {
+  return learnerId ? [learnerId] : [];
+}
+
+export function usageSummary(days = 30, learnerId?: string) {
   const from = since(days);
   const totals =
     (db
@@ -92,16 +102,18 @@ export function usageSummary(days = 30) {
                 SUM(reasoning_tokens) AS reasoning_tokens,
                 SUM(cost) AS cost,
                 AVG(latency_ms) AS avg_latency
-         FROM usage_records WHERE created_at >= ?`,
+         FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)}`,
       )
-      .get(from) as Record<string, unknown> | undefined) ?? {};
+      .get(from, ...learnerParams(learnerId)) as Record<string, unknown> | undefined) ?? {};
 
   const calls = num(totals.calls);
   const successCalls = num(totals.success_calls);
   const latencies = (
     db
-      .prepare('SELECT latency_ms FROM usage_records WHERE created_at >= ? AND success = 1 ORDER BY latency_ms')
-      .all(from) as unknown as { latency_ms: number }[]
+      .prepare(
+        `SELECT latency_ms FROM usage_records WHERE created_at >= ? AND success = 1${learnerClause(learnerId)} ORDER BY latency_ms`,
+      )
+      .all(from, ...learnerParams(learnerId)) as unknown as { latency_ms: number }[]
   ).map((row) => row.latency_ms);
   const p95 = latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : 0;
 
@@ -112,10 +124,10 @@ export function usageSummary(days = 30) {
                 SUM(cost) AS cost,
                 AVG(CASE WHEN success = 1 THEN 1.0 ELSE 0 END) * 100 AS success_rate,
                 AVG(latency_ms) AS avg_latency
-         FROM usage_records WHERE created_at >= ?
+         FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)}
          GROUP BY provider, model ORDER BY calls DESC`,
       )
-      .all(from) as unknown as Record<string, unknown>[]
+      .all(from, ...learnerParams(learnerId)) as unknown as Record<string, unknown>[]
   ).map(groupRow);
 
   const byScenario = (
@@ -124,10 +136,10 @@ export function usageSummary(days = 30) {
         `SELECT scenario AS label, COUNT(*) AS calls, SUM(total_tokens) AS tokens, SUM(cost) AS cost,
                 AVG(CASE WHEN success = 1 THEN 1.0 ELSE 0 END) * 100 AS success_rate,
                 AVG(latency_ms) AS avg_latency
-         FROM usage_records WHERE created_at >= ?
+         FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)}
          GROUP BY scenario ORDER BY calls DESC`,
       )
-      .all(from) as unknown as Record<string, unknown>[]
+      .all(from, ...learnerParams(learnerId)) as unknown as Record<string, unknown>[]
   ).map(groupRow);
 
   const bySubject = (
@@ -137,10 +149,10 @@ export function usageSummary(days = 30) {
                 SUM(cost) AS cost,
                 AVG(CASE WHEN success = 1 THEN 1.0 ELSE 0 END) * 100 AS success_rate,
                 AVG(latency_ms) AS avg_latency
-         FROM usage_records WHERE created_at >= ?
+         FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)}
          GROUP BY COALESCE(subject, '未标注') ORDER BY calls DESC`,
       )
-      .all(from) as unknown as Record<string, unknown>[]
+      .all(from, ...learnerParams(learnerId)) as unknown as Record<string, unknown>[]
   ).map(groupRow);
 
   const settings = getSettings();
@@ -150,8 +162,8 @@ export function usageSummary(days = 30) {
   const monthCost = num(
     (
       db
-        .prepare('SELECT SUM(cost) AS cost FROM usage_records WHERE created_at >= ?')
-        .get(monthStart.getTime()) as { cost: number | null } | undefined
+        .prepare(`SELECT SUM(cost) AS cost FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)}`)
+        .get(monthStart.getTime(), ...learnerParams(learnerId)) as { cost: number | null } | undefined
     )?.cost,
   );
   const percent = settings.monthlyBudget > 0 ? Math.min(100, round((monthCost / settings.monthlyBudget) * 100, 1)) : 0;
@@ -196,7 +208,7 @@ function groupRow(row: Record<string, unknown>): UsageGroupRow {
   };
 }
 
-export function usageDaily(days = 30): UsageTimeRow[] {
+export function usageDaily(days = 30, learnerId?: string): UsageTimeRow[] {
   return (
     db
       .prepare(
@@ -204,10 +216,10 @@ export function usageDaily(days = 30): UsageTimeRow[] {
                 COUNT(*) AS calls, SUM(total_tokens) AS tokens, SUM(cost) AS cost,
                 AVG(CASE WHEN success = 1 THEN 1.0 ELSE 0 END) * 100 AS success_rate,
                 AVG(latency_ms) AS avg_latency
-         FROM usage_records WHERE created_at >= ?
+         FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)}
          GROUP BY date ORDER BY date ASC`,
       )
-      .all(since(days)) as unknown as Record<string, unknown>[]
+      .all(since(days), ...learnerParams(learnerId)) as unknown as Record<string, unknown>[]
   ).map((row) => ({
     date: String(row.date),
     calls: num(row.calls),
@@ -218,24 +230,24 @@ export function usageDaily(days = 30): UsageTimeRow[] {
   }));
 }
 
-export function usageCost(days = 30) {
-  const summary = usageSummary(days);
+export function usageCost(days = 30, learnerId?: string) {
+  const summary = usageSummary(days, learnerId);
   return {
     currency: summary.currency,
     days,
     total: summary.summary.cost,
     byModel: summary.byModel,
     byScenario: summary.byScenario,
-    daily: usageDaily(days).map((row) => ({ date: row.date, cost: row.cost, calls: row.calls })),
+    daily: usageDaily(days, learnerId).map((row) => ({ date: row.date, cost: row.cost, calls: row.calls })),
   };
 }
 
-export function usageRecords(days = 30, limit = 500) {
+export function usageRecords(days = 30, limit = 500, learnerId?: string) {
   return db
     .prepare(
       `SELECT usage_id, provider, model, scenario, subject, prompt_tokens, completion_tokens,
               total_tokens, reasoning_tokens, latency_ms, cost, success, error, created_at
-       FROM usage_records WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?`,
+       FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)} ORDER BY created_at DESC LIMIT ?`,
     )
-    .all(since(days), limit) as unknown as Record<string, unknown>[];
+    .all(since(days), ...learnerParams(learnerId), limit) as unknown as Record<string, unknown>[];
 }

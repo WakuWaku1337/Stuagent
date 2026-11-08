@@ -364,7 +364,14 @@ export async function runCleanup(
           continue;
         }
         try {
-          freedBytes += await removeMedia(mediaId);
+          const owner = db.prepare('SELECT learner_id FROM media WHERE media_id = ?').get(mediaId) as
+            | { learner_id: string }
+            | undefined;
+          if (!owner) {
+            skipped += 1;
+            continue;
+          }
+          freedBytes += await removeMedia(mediaId, owner.learner_id);
           removedMedia += 1;
           referencedNow.delete(mediaId);
         } catch (e) {

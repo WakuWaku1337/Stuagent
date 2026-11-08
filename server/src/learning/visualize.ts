@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
 import { deleteLegacyCourseware, getLegacyCourseware, listLegacyCourseware } from '../courseware/legacy.ts';
+import { currentLearnerId } from './context.ts';
 
 export const VISUALIZATION_TYPES = [
   'geometry3d',
@@ -13,6 +14,8 @@ export const VISUALIZATION_TYPES = [
   'physics',
   'diagram',
 ] as const;
+
+const GLOBAL_LEARNER = '__global__';
 
 export type VisualizationType = (typeof VISUALIZATION_TYPES)[number];
 
@@ -27,6 +30,7 @@ export interface Visualization {
 
 interface VisualizationRow {
   visualization_id: string;
+  learner_id: string;
   type: VisualizationType;
   title: string;
   spec: string;
@@ -335,20 +339,31 @@ function toVisualization(row: VisualizationRow): Visualization {
 }
 
 export function listVisualizations(type?: VisualizationType): Visualization[] {
+  const learnerId = currentLearnerId();
   if (type) {
     return (
-      db.prepare('SELECT * FROM visualizations WHERE type = ? ORDER BY created_at DESC LIMIT 50').all(type) as unknown as VisualizationRow[]
+      db
+        .prepare(
+          `SELECT * FROM visualizations WHERE type = ? AND (learner_id = '__global__' OR learner_id = ?) ORDER BY created_at DESC LIMIT 50`,
+        )
+        .all(type, learnerId) as unknown as VisualizationRow[]
     ).map(toVisualization);
   }
   return (
-    db.prepare('SELECT * FROM visualizations ORDER BY created_at DESC LIMIT 50').all() as unknown as VisualizationRow[]
+    db
+      .prepare(
+        `SELECT * FROM visualizations WHERE (learner_id = '__global__' OR learner_id = ?) ORDER BY created_at DESC LIMIT 50`,
+      )
+      .all(learnerId) as unknown as VisualizationRow[]
   ).map(toVisualization);
 }
 
 export function getVisualization(id: string): Visualization | undefined {
-  const row = db.prepare('SELECT * FROM visualizations WHERE visualization_id = ?').get(id) as unknown as
-    | VisualizationRow
-    | undefined;
+  const row = db
+    .prepare(
+      `SELECT * FROM visualizations WHERE visualization_id = ? AND (learner_id = '__global__' OR learner_id = ?)`,
+    )
+    .get(id, currentLearnerId()) as unknown as VisualizationRow | undefined;
   return row ? toVisualization(row) : undefined;
 }
 
@@ -370,15 +385,20 @@ export function createVisualization(input: {
     if (existing) return existing;
   }
   const id = input.visualizationId ?? randomUUID();
+  const learnerId = input.source === 'preset' ? GLOBAL_LEARNER : currentLearnerId();
   db.prepare(
-    `INSERT INTO visualizations (visualization_id, type, title, spec, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, type, title, JSON.stringify(spec), input.source ?? null, Date.now());
+    `INSERT INTO visualizations (visualization_id, learner_id, type, title, spec, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, learnerId, type, title, JSON.stringify(spec), input.source ?? null, Date.now());
   return getVisualization(id)!;
 }
 
 export function deleteVisualization(id: string): boolean {
-  return db.prepare('DELETE FROM visualizations WHERE visualization_id = ?').run(id).changes > 0;
+  return (
+    db
+      .prepare('DELETE FROM visualizations WHERE visualization_id = ? AND learner_id = ?')
+      .run(id, currentLearnerId()).changes > 0
+  );
 }
 
 export interface UnifiedVisualization extends Omit<Visualization, 'type'> {
@@ -412,9 +432,11 @@ export function listUnifiedVisualizations(type?: VisualizationType): UnifiedVisu
 }
 
 export function getUnifiedVisualization(id: string): UnifiedVisualization | undefined {
-  const row = db.prepare('SELECT * FROM visualizations WHERE visualization_id = ?').get(id) as unknown as
-    | VisualizationRow
-    | undefined;
+  const row = db
+    .prepare(
+      `SELECT * FROM visualizations WHERE visualization_id = ? AND (learner_id = '__global__' OR learner_id = ?)`,
+    )
+    .get(id, currentLearnerId()) as unknown as VisualizationRow | undefined;
   if (row) return toUnified(row);
   const legacy = getLegacyCourseware(id);
   if (!legacy) return undefined;

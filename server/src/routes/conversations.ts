@@ -88,6 +88,7 @@ conversations.put('/:id', async (c) => {
 
 conversations.delete('/:id', async (c) => {
   const id = c.req.param('id');
+  if (!getConversation(id)) return c.json({ error: '会话不存在' }, 404);
   const mediaIds = conversationMediaIds(id);
   if (!deleteConversation(id)) return c.json({ error: '会话不存在' }, 404);
   dropConversationSessions(id);

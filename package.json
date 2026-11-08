@@ -12,10 +12,22 @@
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
     "build": "npm run build --workspace web",
+    "auth:bootstrap": "npm run auth:bootstrap --workspace server",
+    "auth:reset": "npm run auth:reset --workspace server",
+    "user:create": "npm run user:create --workspace server",
+    "auth:check": "npm run auth:check --workspace server",
+    "auth:isolation": "npm run auth:isolation --workspace server",
+    "auth:migrate": "npm run auth:migrate --workspace server",
     "milvus:up": "docker compose -f docker/docker-compose.yml up -d",
     "milvus:down": "docker compose -f docker/docker-compose.yml down",
     "milvus:health": "curl -sf http://localhost:9091/healthz",
-    "asr:model": "npm run asr:model --workspace server"
+    "docling:up": "docker compose -f docker/docker-compose.yml --profile docling up -d docling-serve",
+    "docling:down": "docker compose -f docker/docker-compose.yml --profile docling down docling-serve",
+    "docling:models": "node docker/fetch-docling-model.mjs",
+    "asr:model": "npm run asr:model --workspace server",
+    "backup": "npm run backup --workspace server",
+    "auth:admin-check": "npm run auth:admin-check --workspace server",
+    "bench:s23": "npm run bench:s23 --workspace server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

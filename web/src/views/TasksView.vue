@@ -48,8 +48,9 @@ function connect() {
     connected.value = true;
     ws?.send('ping');
   };
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     connected.value = false;
+    if (event.code === 4401) window.dispatchEvent(new Event('edupi:unauthorized'));
   };
   ws.onmessage = (evt) => {
     try {

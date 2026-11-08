@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
+import { currentLearnerId } from './context.ts';
 
 export interface WrongRow {
   record_id: string;
@@ -62,7 +63,9 @@ export function listWrongRecords(learnerId: string, dueOnly = false): WrongRow[]
 
 /** SM-2 简化版：quality 0-5，>=3 表示复习通过 */
 export function reviewWrongRecord(id: string, quality: number): WrongRow {
-  const row = db.prepare('SELECT * FROM wrong_records WHERE record_id = ?').get(id) as unknown as WrongRow | undefined;
+  const row = db
+    .prepare('SELECT * FROM wrong_records WHERE record_id = ? AND learner_id = ?')
+    .get(id, currentLearnerId()) as unknown as WrongRow | undefined;
   if (!row) throw new Error('错题记录不存在');
   const q = Math.max(0, Math.min(5, Math.round(quality)));
   let ease = row.ease;
@@ -77,13 +80,15 @@ export function reviewWrongRecord(id: string, quality: number): WrongRow {
   const now = Date.now();
   const nextReview = now + interval * 24 * 60 * 60 * 1000;
   db.prepare(
-    'UPDATE wrong_records SET review_count = review_count + 1, ease = ?, interval_days = ?, next_review = ?, last_review = ? WHERE record_id = ?',
-  ).run(ease, interval, nextReview, now, id);
-  return db.prepare('SELECT * FROM wrong_records WHERE record_id = ?').get(id) as unknown as WrongRow;
+    'UPDATE wrong_records SET review_count = review_count + 1, ease = ?, interval_days = ?, next_review = ?, last_review = ? WHERE record_id = ? AND learner_id = ?',
+  ).run(ease, interval, nextReview, now, id, currentLearnerId());
+  return db
+    .prepare('SELECT * FROM wrong_records WHERE record_id = ? AND learner_id = ?')
+    .get(id, currentLearnerId()) as unknown as WrongRow;
 }
 
 export function deleteWrongRecord(id: string): void {
-  db.prepare('DELETE FROM wrong_records WHERE record_id = ?').run(id);
+  db.prepare('DELETE FROM wrong_records WHERE record_id = ? AND learner_id = ?').run(id, currentLearnerId());
 }
 
 export function dueCount(learnerId: string): number {

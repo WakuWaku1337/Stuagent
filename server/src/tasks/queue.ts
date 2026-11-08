@@ -3,12 +3,14 @@ import { EventEmitter } from 'node:events';
 import { db } from '../store.ts';
 import { generateQuiz, startSession } from '../learning/quiz.ts';
 import { chat } from '../pi.ts';
+import { currentLearnerId, runWithLearner } from '../learning/context.ts';
 
 export type TaskType = 'quiz' | 'analysis';
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'timeout' | 'cancelled';
 
 export interface TaskRow {
   task_id: string;
+  learner_id: string;
   type: TaskType;
   status: TaskStatus;
   payload: string;
@@ -47,29 +49,33 @@ export function emitTask(id: string) {
 export function enqueue(type: TaskType, payload: Record<string, unknown>): TaskRow {
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO tasks (task_id, type, status, payload, attempts, created_at) VALUES (?, ?, 'queued', ?, 0, ?)`,
-  ).run(id, type, JSON.stringify(payload), Date.now());
+    `INSERT INTO tasks (task_id, learner_id, type, status, payload, attempts, created_at) VALUES (?, ?, ?, 'queued', ?, 0, ?)`,
+  ).run(id, currentLearnerId(), type, JSON.stringify(payload), Date.now());
   emitTask(id);
   setImmediate(() => void drain());
   return row(id)!;
 }
 
 export function listTasks(limit = 50): TaskRow[] {
-  return db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as TaskRow[];
+  return db
+    .prepare('SELECT * FROM tasks WHERE learner_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(currentLearnerId(), limit) as unknown as TaskRow[];
 }
 
 export function getTask(id: string): TaskRow | undefined {
-  return row(id);
+  return db
+    .prepare('SELECT * FROM tasks WHERE task_id = ? AND learner_id = ?')
+    .get(id, currentLearnerId()) as unknown as TaskRow | undefined;
 }
 
 export function cancelTask(id: string): TaskRow | undefined {
-  const task = row(id);
+  const task = getTask(id);
   if (!task) return undefined;
   if (task.status === 'queued') {
     update(id, { status: 'cancelled', finished_at: Date.now() });
     emitTask(id);
   }
-  return row(id);
+  return getTask(id);
 }
 
 /** 服务重启后把 queued/running 任务重新入队（可续任务） */
@@ -134,7 +140,10 @@ async function drain(): Promise<void> {
       timeouts.set(next.task_id, watchdog);
 
       try {
-        const result = await execute(next);
+        const result = await runWithLearner(
+          { learnerId: next.learner_id, userId: next.learner_id, role: 'user' },
+          () => execute(next),
+        );
         const current = row(next.task_id);
         if (current?.status === 'running') {
           update(next.task_id, { status: 'done', result: JSON.stringify(result), finished_at: Date.now() });

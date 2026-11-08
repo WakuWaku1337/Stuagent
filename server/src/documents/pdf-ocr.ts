@@ -1,12 +1,11 @@
-import { execFile, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { callLlm } from '../learning/llm.ts';
+import { currentLearnerId, runWithLearner } from '../learning/context.ts';
 import { resolveOcrModel } from '../media/service.ts';
-import { serverRoot, uploadsDir } from '../storage/paths.ts';
+import { uploadsDir } from '../storage/paths.ts';
 import {
   clearOcrPages,
   db,
@@ -23,20 +22,19 @@ import {
   type OcrPageRow,
 } from '../store.ts';
 import { chunkBlocks } from './chunker.ts';
+import { convertWithDocling, doclingAvailable, doclingBaseUrl, type DoclingPage } from './docling.ts';
 import { parseMarkdown, parseText, type ParsedBlock } from './parsers.ts';
 
-const execFileAsync = promisify(execFile);
-
 const DPI = clampNumber(Number(process.env.OCR_DPI ?? 200), 150, 320);
-const CONCURRENCY = Math.round(clampNumber(Number(process.env.OCR_CONCURRENCY ?? 2), 1, 4));
 const CONFIDENCE_THRESHOLD = clampNumber(Number(process.env.OCR_CONFIDENCE_THRESHOLD ?? 0.8), 0.1, 0.99);
 const TIMEOUT_MS = Math.round(clampNumber(Number(process.env.OCR_TIMEOUT_MS ?? 180_000), 30_000, 600_000));
+const VISION_FORMULA_MIN_MARKERS = Math.max(0, Number(process.env.OCR_VISION_FORMULA_MIN_MARKERS ?? 10));
 const MIN_PAGE_TEXT = 30;
 const LARGE_IMAGE_RATIO = 0.4;
 const ENGINE_MODE = (process.env.OCR_ENGINE ?? 'auto').trim().toLowerCase();
 
 export type OcrPageStatus = 'pending' | 'text' | 'ocr' | 'review' | 'confirmed' | 'failed';
-export type OcrEngineUsed = 'text' | 'vision' | 'local' | 'local+vision';
+export type OcrEngineUsed = 'text' | 'docling' | 'docling+vision';
 
 export interface PdfPageAnalysis {
   page: number;
@@ -81,13 +79,6 @@ export interface OcrDetail {
   engine: string;
 }
 
-interface PageOcrResult {
-  engine: OcrEngineUsed;
-  markdown: string;
-  confidence: number;
-  selfConfidence?: number;
-}
-
 interface RenderedPage {
   page: number;
   file: string;
@@ -96,11 +87,22 @@ interface RenderedPage {
 }
 
 const activeJobs = new Set<string>();
-let localAvailability: Promise<boolean> | null = null;
 
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(Math.max(value, min), max);
+}
+
+const ALLOWED_MODES = new Set(['auto', 'docling', 'docling+vision']);
+
+function assertEngineMode(): void {
+  if (!ALLOWED_MODES.has(ENGINE_MODE)) {
+    throw new Error(`OCR_ENGINE=${ENGINE_MODE} 已移除；请使用 auto、docling 或 docling+vision`);
+  }
+}
+
+function allowsVisionEnhancement(): boolean {
+  return ENGINE_MODE === 'auto' || ENGINE_MODE === 'docling+vision';
 }
 
 function relativeImageFile(documentId: string, page: number): string {
@@ -319,7 +321,7 @@ async function ocrPageVision(
   image: Buffer,
   model: string,
   options: { subject?: string; signal?: AbortSignal; qualityCap?: number } = {},
-): Promise<PageOcrResult> {
+): Promise<{ markdown: string; confidence: number }> {
   const dataUrl = `data:image/jpeg;base64,${image.toString('base64')}`;
   const result = await callLlm({
     messages: [
@@ -342,50 +344,9 @@ async function ocrPageVision(
   const parsed = parseVisionOutput(result.text);
   const cap = options.qualityCap ?? 1;
   return {
-    engine: 'vision',
     markdown: parsed.markdown,
-    selfConfidence: parsed.selfConfidence,
     confidence: Math.min(scoreOcrMarkdown(parsed.markdown, parsed.selfConfidence), cap),
   };
-}
-
-function ocrBridgePath(): string {
-  return join(serverRoot, 'scripts', 'rapidocr_bridge.py');
-}
-
-async function localOcrAvailable(): Promise<boolean> {
-  if (ENGINE_MODE === 'vision') return false;
-  if (!localAvailability) {
-    localAvailability = Promise.resolve().then(() => {
-      const python = process.env.OCR_LOCAL_PYTHON?.trim() || 'python';
-      const check = spawnSync(python, ['-c', 'import rapidocr'], { timeout: 15_000, windowsHide: true });
-      return check.status === 0;
-    });
-  }
-  return localAvailability;
-}
-
-async function ocrPageLocal(imageFile: string, qualityCap = 1): Promise<PageOcrResult> {
-  const python = process.env.OCR_LOCAL_PYTHON?.trim() || 'python';
-  const { stdout } = await execFileAsync(python, [ocrBridgePath(), imageFile], {
-    timeout: TIMEOUT_MS,
-    maxBuffer: 20 * 1024 * 1024,
-    windowsHide: true,
-  });
-  const parsed = JSON.parse(stdout) as { text?: string; confidence?: number };
-  const markdown = cleanMarkdown(String(parsed.text ?? ''));
-  return {
-    engine: 'local',
-    markdown,
-    selfConfidence: parsed.confidence,
-    confidence: Math.min(scoreOcrMarkdown(markdown, parsed.confidence), qualityCap),
-  };
-}
-
-function formulaDensity(text: string): number {
-  if (!text) return 0;
-  const hits = text.match(/[=<>≤≥≠√∑∫π∞±×÷·^_{}]|\\frac|\\sqrt|\\[a-zA-Z]+\s*\^/g)?.length ?? 0;
-  return hits / text.length;
 }
 
 /** 拉普拉斯高频能量 / 灰度对比度：扫描页越糊，OCR 置信度上限越低 */
@@ -438,31 +399,6 @@ export function sharpnessCap(sharpness: number): number {
   if (sharpness < 2.4) return 0.78;
   if (sharpness < 3.2) return 0.9;
   return 1;
-}
-
-async function ocrPage(
-  imageFile: string,
-  model: string | null,
-  options: { subject?: string },
-): Promise<PageOcrResult> {
-  const local = await localOcrAvailable();
-  if (ENGINE_MODE === 'local' && !local) {
-    throw new Error('本地 OCR 不可用：请先安装 rapidocr（python -m pip install rapidocr onnxruntime）或改用 OCR_ENGINE=vision');
-  }
-  const image = await readFile(imageFile);
-  const qualityCap = sharpnessCap(await imageSharpness(image));
-  if (!local) {
-    if (!model) throw new Error('没有可用的视觉模型，无法执行 OCR');
-    return ocrPageVision(image, model, { ...options, qualityCap });
-  }
-  const result = await ocrPageLocal(imageFile, qualityCap);
-  if (ENGINE_MODE === 'local') return result;
-  const needsVision = !result.markdown || result.confidence < 0.85 || formulaDensity(result.markdown) > 0.02;
-  if (!needsVision) return result;
-  if (!model) return result;
-  const escalated = await ocrPageVision(image, model, { ...options, qualityCap });
-  if (!escalated.markdown) return result;
-  return { ...escalated, engine: 'local+vision' };
 }
 
 function textChapter(text: string): string {
@@ -556,7 +492,7 @@ export function ocrDetail(documentId: string): OcrDetail {
       height: row.height,
     })),
     threshold: CONFIDENCE_THRESHOLD,
-    engine: ENGINE_MODE,
+    engine: ENGINE_MODE === 'auto' ? 'docling+vision' : ENGINE_MODE,
   };
 }
 
@@ -575,11 +511,13 @@ export function startOcrJob(
   documentId: string,
   options: { analysis?: PdfAnalysis; force?: boolean } = {},
 ): OcrJobRow {
+  assertEngineMode();
   const current = getOcrJob(documentId);
   if (activeJobs.has(documentId)) return getOcrJob(documentId) ?? current!;
   if (options.force) clearOcrPages(documentId);
   saveOcrJob({
     document_id: documentId,
+    learner_id: currentLearnerId(),
     engine: ENGINE_MODE,
     status: 'queued',
     total_pages: options.analysis?.pageCount ?? current?.total_pages ?? 0,
@@ -592,7 +530,7 @@ export function startOcrJob(
   });
   const job = getOcrJob(documentId)!;
   updateDocument(documentId, { status: 'ocr_queued', error: null });
-  setImmediate(() => void runOcrJob(documentId, options.analysis));
+  setImmediate(() => void runOcrJob(documentId, { analysis: options.analysis, force: options.force }));
   return job;
 }
 
@@ -605,17 +543,124 @@ export function recoverOcrJobs(): void {
   }
 }
 
-async function runOcrJob(documentId: string, preset?: PdfAnalysis): Promise<void> {
+async function runDoclingPages(
+  documentId: string,
+  doc: NonNullable<ReturnType<typeof getDocument>>,
+  buffer: Buffer,
+  pending: number[],
+  existing: Map<number, OcrPageRow>,
+  model: string | null,
+  doneStart: number,
+): Promise<{ done: number; low: number; failed: number }> {
+  if (!(await doclingAvailable())) {
+    throw new Error(`Docling 服务未启动（${doclingBaseUrl()}），请先运行 npm run docling:up`);
+  }
+  const cacheFile = join(uploadsDir, 'ocr', documentId, 'docling.json');
+  // 强制重试只重跑逐页校对/增强，已成功的整篇转换直接复用
+  const conversion = await convertWithDocling(buffer, doc.filename, { cacheFile });
+  const byPage = new Map<number, DoclingPage>(conversion.pages.map((page) => [page.page, page]));
+
+  let low = 0;
+  let failed = 0;
+  for (const [index, pageNo] of pending.entries()) {
+    if (!getDocument(documentId)) break;
+    const row = getOcrPage(documentId, pageNo) ?? existing.get(pageNo);
+    if (!row?.image_file) {
+      saveOcrPage({
+        document_id: documentId,
+        page: pageNo,
+        status: 'failed',
+        engine: 'docling',
+        markdown: row?.markdown ?? '',
+        confidence: 0,
+        image_file: null,
+        width: row?.width ?? null,
+        height: row?.height ?? null,
+      });
+      failed += 1;
+      continue;
+    }
+    const imagePath = join(uploadsDir, row.image_file);
+    const image = existsSync(imagePath) ? await readFile(imagePath) : null;
+    const cap = image ? sharpnessCap(await imageSharpness(image)) : 1;
+    const page = byPage.get(pageNo);
+    let markdown = page?.markdown ?? '';
+    let confidence = Math.min(page?.confidence ?? scoreOcrMarkdown(markdown), cap);
+    let engine: OcrEngineUsed = 'docling';
+
+    if (
+      markdown.trim() &&
+      allowsVisionEnhancement() &&
+      model &&
+      image &&
+      (confidence < CONFIDENCE_THRESHOLD ||
+        (VISION_FORMULA_MIN_MARKERS > 0 && (page?.formulas ?? 0) >= VISION_FORMULA_MIN_MARKERS))
+    ) {
+      try {
+        const enhanced = await ocrPageVision(image, model, {
+          subject: doc.subject ?? undefined,
+          qualityCap: cap,
+        });
+        if (enhanced.markdown.trim()) {
+          markdown = enhanced.markdown;
+          confidence = enhanced.confidence;
+          engine = 'docling+vision';
+        }
+      } catch {
+        // 视觉增强失败时保留 Docling 结果
+      }
+    }
+
+    const isLow = !markdown.trim() || confidence < CONFIDENCE_THRESHOLD;
+    saveOcrPage({
+      document_id: documentId,
+      page: pageNo,
+      status: isLow ? 'review' : 'ocr',
+      engine,
+      markdown,
+      confidence,
+      image_file: row.image_file,
+      width: row.width,
+      height: row.height,
+    });
+    if (isLow) low += 1;
+    updateOcrJobProgress(documentId, {
+      done_pages: doneStart + index + 1,
+      low_confidence: low,
+      failed_pages: failed,
+      current_page: pageNo,
+    });
+  }
+  return { done: pending.length, low, failed };
+}
+
+async function runOcrJob(
+  documentId: string,
+  options: { analysis?: PdfAnalysis; force?: boolean } = {},
+): Promise<void> {
+  const job = getOcrJob(documentId);
+  const learnerId = job?.learner_id ?? currentLearnerId();
+  return runWithLearner({ learnerId, userId: learnerId, role: 'user' }, () =>
+    runOcrJobInner(documentId, options),
+  );
+}
+
+async function runOcrJobInner(
+  documentId: string,
+  options: { analysis?: PdfAnalysis; force?: boolean } = {},
+): Promise<void> {
   if (activeJobs.has(documentId)) return;
+  assertEngineMode();
   activeJobs.add(documentId);
   const doc = getDocument(documentId);
   try {
     if (!doc) throw new Error('文档不存在');
     const file = join(uploadsDir, `${documentId}.${doc.file_type}`);
     const buffer = await readFile(file);
-    const analysis = preset ?? (await analyzePdf(buffer));
+    const analysis = options.analysis ?? (await analyzePdf(buffer));
     saveOcrJob({
       document_id: documentId,
+      learner_id: doc.learner_id,
       engine: ENGINE_MODE,
       status: 'running',
       total_pages: analysis.pageCount,
@@ -628,15 +673,11 @@ async function runOcrJob(documentId: string, preset?: PdfAnalysis): Promise<void
     });
     updateDocument(documentId, { status: 'ocr_running', error: null });
 
-    const localReady = await localOcrAvailable();
     let model: string | null = null;
     try {
       model = resolveOcrModel();
     } catch {
       model = null;
-    }
-    if (!localReady && !model) {
-      throw new Error('扫描件需要 OCR，但当前没有可用视觉模型；请切换支持图片的模型，或安装本地 RapidOCR');
     }
 
     const existing = new Map(listOcrPages(documentId).map((row) => [row.page, row]));
@@ -700,7 +741,6 @@ async function runOcrJob(documentId: string, preset?: PdfAnalysis): Promise<void
           width: image?.width ?? null,
           height: image?.height ?? null,
         });
-        done += 1;
         continue;
       }
       saveOcrPage({
@@ -716,58 +756,8 @@ async function runOcrJob(documentId: string, preset?: PdfAnalysis): Promise<void
       });
     }
 
-    let failed = 0;
-    let low = 0;
-    let cursor = 0;
-    const workers = Array.from({ length: Math.min(CONCURRENCY, pending.length) }, async () => {
-      for (;;) {
-        const index = cursor;
-        cursor += 1;
-        if (index >= pending.length) return;
-        const pageNo = pending[index];
-        if (!getDocument(documentId)) return;
-        const row = getOcrPage(documentId, pageNo);
-        if (!row?.image_file) {
-          done += 1;
-          failed += 1;
-          continue;
-        }
-        updateOcrJobProgress(documentId, { current_page: pageNo });
-        try {
-          const result = await ocrPage(join(uploadsDir, row.image_file), model, { subject: doc.subject ?? undefined });
-          const isLow = !result.markdown.trim() || result.confidence < CONFIDENCE_THRESHOLD;
-          saveOcrPage({
-            document_id: documentId,
-            page: pageNo,
-            status: isLow ? 'review' : 'ocr',
-            engine: result.engine,
-            markdown: result.markdown,
-            confidence: result.confidence,
-            image_file: row.image_file,
-            width: row.width,
-            height: row.height,
-          });
-          done += 1;
-          if (isLow) low += 1;
-        } catch {
-          failed += 1;
-          done += 1;
-          saveOcrPage({
-            document_id: documentId,
-            page: pageNo,
-            status: 'failed',
-            engine: null,
-            markdown: row.markdown,
-            confidence: 0,
-            image_file: row.image_file,
-            width: row.width,
-            height: row.height,
-          });
-        }
-        updateOcrJobProgress(documentId, { done_pages: done, low_confidence: low, failed_pages: failed });
-      }
-    });
-    await Promise.all(workers);
+    const result = await runDoclingPages(documentId, doc, buffer, pending, existing, model, done);
+    done += result.done;
 
     const chunkCount = rebuildChunksFromOcr(documentId);
     const allPages = listOcrPages(documentId);
@@ -776,6 +766,7 @@ async function runOcrJob(documentId: string, preset?: PdfAnalysis): Promise<void
     const finished = allPages.filter((row) => row.status !== 'pending').length;
     saveOcrJob({
       document_id: documentId,
+      learner_id: currentLearnerId(),
       engine: ENGINE_MODE,
       status: 'done',
       total_pages: analysis.pageCount,
@@ -797,6 +788,7 @@ async function runOcrJob(documentId: string, preset?: PdfAnalysis): Promise<void
     const current = getOcrJob(documentId);
     saveOcrJob({
       document_id: documentId,
+      learner_id: currentLearnerId(),
       engine: current?.engine ?? ENGINE_MODE,
       status: 'failed',
       total_pages: current?.total_pages ?? 0,

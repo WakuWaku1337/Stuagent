@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
 import { chatJson } from './llm.ts';
 import { updateMastery } from './quiz.ts';
-import { DEFAULT_LEARNER, profileContext } from './memory.ts';
+import { currentLearnerId } from './context.ts';
+import { profileContext } from './memory.ts';
 import { addWrongRecord } from './wrongbook.ts';
 import { chatVisionJson } from './vision.ts';
 
@@ -116,10 +117,11 @@ function normalizePaper(input: RecognizedPaper, sourceName?: string): Recognized
 export function savePaper(paper: RecognizedPaper, source: string): { exam_id: string; questions: number } {
   const examId = randomUUID();
   db.prepare(
-    `INSERT INTO exam_papers (exam_id, name, subject, exam_date, total_score, my_score, duration, source, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'recognized', ?)`,
+    `INSERT INTO exam_papers (exam_id, learner_id, name, subject, exam_date, total_score, my_score, duration, source, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'recognized', ?)`,
   ).run(
     examId,
+    currentLearnerId(),
     paper.name,
     paper.subject ?? null,
     paper.exam_date ?? null,
@@ -153,11 +155,15 @@ export function savePaper(paper: RecognizedPaper, source: string): { exam_id: st
 }
 
 export function listExams(): ExamPaperRow[] {
-  return db.prepare('SELECT * FROM exam_papers ORDER BY COALESCE(exam_date, created_at) DESC').all() as unknown as ExamPaperRow[];
+  return db
+    .prepare('SELECT * FROM exam_papers WHERE learner_id = ? ORDER BY COALESCE(exam_date, created_at) DESC')
+    .all(currentLearnerId()) as unknown as ExamPaperRow[];
 }
 
 export function getExam(examId: string) {
-  const paper = db.prepare('SELECT * FROM exam_papers WHERE exam_id = ?').get(examId) as unknown as ExamPaperRow | undefined;
+  const paper = db
+    .prepare('SELECT * FROM exam_papers WHERE exam_id = ? AND learner_id = ?')
+    .get(examId, currentLearnerId()) as unknown as ExamPaperRow | undefined;
   if (!paper) return undefined;
   const questions = db
     .prepare('SELECT * FROM exam_questions WHERE exam_id = ? ORDER BY question_no')
@@ -301,7 +307,7 @@ export async function analyzeExam(examId: string): Promise<AnalyzeResult> {
       Date.now(),
     );
     addWrongRecord({
-      learnerId: DEFAULT_LEARNER,
+      learnerId: currentLearnerId(),
       questionId: q.exam_question_id,
       snapshot: {
         content: q.content ?? `第${q.question_no}题`,
@@ -393,8 +399,12 @@ export interface CompareResult {
 
 export function compareExams(subject?: string): CompareResult {
   const papers = subject
-    ? (db.prepare('SELECT * FROM exam_papers WHERE subject = ? ORDER BY exam_date ASC').all(subject) as unknown as ExamPaperRow[])
-    : (db.prepare('SELECT * FROM exam_papers ORDER BY exam_date ASC').all() as unknown as ExamPaperRow[]);
+    ? (db
+        .prepare('SELECT * FROM exam_papers WHERE learner_id = ? AND subject = ? ORDER BY exam_date ASC')
+        .all(currentLearnerId(), subject) as unknown as ExamPaperRow[])
+    : (db
+        .prepare('SELECT * FROM exam_papers WHERE learner_id = ? ORDER BY exam_date ASC')
+        .all(currentLearnerId()) as unknown as ExamPaperRow[]);
 
   const series = papers
     .filter((p) => (p.total_score ?? 0) > 0)

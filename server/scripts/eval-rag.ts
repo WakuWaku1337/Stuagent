@@ -22,7 +22,7 @@ const latencies: number[] = [];
 
 for (const c of cases) {
   const t0 = Date.now();
-  const result = await searchKnowledge(c.query, { topK: 5 });
+  const result = await searchKnowledge(c.query, { topK: 5, noCache: true });
   latencies.push(Date.now() - t0);
   const names = result.citations.map((x) => x.source_name);
   const rank = names.findIndex((n) => n === c.expect_source);

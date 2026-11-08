@@ -13,8 +13,10 @@ import {
   updateModel,
   updateReasoning,
 } from '../settings/store.ts';
+import { requireAdmin } from '../auth/middleware.ts';
 
 const settings = new Hono();
+settings.use('*', requireAdmin);
 
 function reasoningValue(value: unknown): ReasoningLevel {
   return value === 'low' || value === 'high' ? value : 'medium';

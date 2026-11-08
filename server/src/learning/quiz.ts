@@ -3,7 +3,7 @@ import { db } from '../store.ts';
 import { bktUpdate, DEFAULT_BKT } from './bkt.ts';
 import { chatJson } from './llm.ts';
 import { getMastery, saveMastery } from './mastery.ts';
-import { DEFAULT_LEARNER } from './memory.ts';
+import { currentLearnerId } from './context.ts';
 import { getQuestion, publicQuestion, saveQuestions, type QuestionRow } from './questions.ts';
 import { addWrongRecord } from './wrongbook.ts';
 
@@ -23,7 +23,7 @@ export function recommendDifficulty(knowledgePoint: string): {
   probability: number | null;
   reason: string;
 } {
-  const row = getMastery(DEFAULT_LEARNER, knowledgePoint);
+  const row = getMastery(currentLearnerId(), knowledgePoint);
   if (!row) {
     return { difficulty: '中等', probability: null, reason: '暂无该知识点的掌握度数据，先从中等难度开始' };
   }
@@ -108,7 +108,7 @@ export function startSession(input: {
      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   ).run(
     sessionId,
-    DEFAULT_LEARNER,
+    currentLearnerId(),
     input.type,
     input.title ?? (input.type === 'mock' ? '模拟考试' : '随堂练习'),
     input.subject ?? null,
@@ -121,7 +121,9 @@ export function startSession(input: {
 }
 
 export function sessionQuestionIds(sessionId: string): string[] {
-  const row = db.prepare('SELECT question_ids FROM quiz_sessions WHERE session_id = ?').get(sessionId) as
+  const row = db
+    .prepare('SELECT question_ids FROM quiz_sessions WHERE session_id = ? AND learner_id = ?')
+    .get(sessionId, currentLearnerId()) as
     | { question_ids: string | null }
     | undefined;
   if (!row?.question_ids) return [];
@@ -133,7 +135,9 @@ export function sessionQuestionIds(sessionId: string): string[] {
 }
 
 export function sessionInfo(sessionId: string) {
-  const row = db.prepare('SELECT * FROM quiz_sessions WHERE session_id = ?').get(sessionId) as
+  const row = db
+    .prepare('SELECT * FROM quiz_sessions WHERE session_id = ? AND learner_id = ?')
+    .get(sessionId, currentLearnerId()) as
     | {
         session_id: string;
         type: string;
@@ -154,11 +158,11 @@ export function sessionInfo(sessionId: string) {
 }
 
 export function updateMastery(knowledgePoint: string, correct: boolean): number {
-  const row = getMastery(DEFAULT_LEARNER, knowledgePoint);
+  const row = getMastery(currentLearnerId(), knowledgePoint);
   const prior = row?.probability ?? DEFAULT_BKT.pL0;
   const next = bktUpdate(prior, correct);
   saveMastery({
-    learner_id: DEFAULT_LEARNER,
+    learner_id: currentLearnerId(),
     knowledge_point: knowledgePoint,
     probability: next,
     correct_count: (row?.correct_count ?? 0) + (correct ? 1 : 0),
@@ -184,6 +188,10 @@ export function answerQuestion(
   questionId: string,
   studentAnswer: string,
 ): GradeResult {
+  const owned = db
+    .prepare('SELECT 1 FROM quiz_sessions WHERE session_id = ? AND learner_id = ?')
+    .get(sessionId, currentLearnerId());
+  if (!owned) throw new Error('测验不存在');
   const question = getQuestion(questionId);
   if (!question) throw new Error('题目不存在');
   const isCorrect = studentAnswer.trim().toUpperCase() === question.answer.trim().toUpperCase();
@@ -196,7 +204,7 @@ export function answerQuestion(
   let wrongRecordId: string | undefined;
   if (!isCorrect) {
     const record = addWrongRecord({
-      learnerId: DEFAULT_LEARNER,
+      learnerId: currentLearnerId(),
       questionId,
       snapshot: {
         content: question.content,
@@ -240,10 +248,11 @@ export function submitSession(
   const results = answers.map((a) => answerQuestion(sessionId, a.question_id, a.answer));
   const correct = results.filter((r) => r.is_correct).length;
   const score = info.total > 0 ? Number(((correct / info.total) * 100).toFixed(1)) : 0;
-  db.prepare("UPDATE quiz_sessions SET status = 'finished', score = ?, finished_at = ? WHERE session_id = ?").run(
+  db.prepare("UPDATE quiz_sessions SET status = 'finished', score = ?, finished_at = ? WHERE session_id = ? AND learner_id = ?").run(
     score,
     Date.now(),
     sessionId,
+    currentLearnerId(),
   );
   return { session_id: sessionId, total: info.total, correct, score, results };
 }
@@ -251,7 +260,7 @@ export function submitSession(
 export function listSessions(limit = 20) {
   return db
     .prepare(
-      'SELECT session_id, type, title, subject, total, score, status, started_at, finished_at FROM quiz_sessions ORDER BY started_at DESC LIMIT ?',
+      'SELECT session_id, type, title, subject, total, score, status, started_at, finished_at FROM quiz_sessions WHERE learner_id = ? ORDER BY started_at DESC LIMIT ?',
     )
-    .all(limit);
+    .all(currentLearnerId(), limit);
 }

@@ -8,6 +8,7 @@ import { getSettings } from '../settings/store.ts';
 import { mediaDir } from '../storage/paths.ts';
 import { checkStorageQuota } from '../storage/quota.ts';
 import { referencedMediaIds } from '../storage/refs.ts';
+import { currentLearnerId } from '../learning/context.ts';
 
 export { mediaDir };
 
@@ -16,6 +17,7 @@ const MAX_OCR_BYTES = 5 * 1024 * 1024;
 
 export interface MediaRow {
   media_id: string;
+  learner_id: string;
   filename: string;
   stored_name: string;
   mime: string;
@@ -70,20 +72,22 @@ export function mediaUrl(mediaId: string): string {
   return `/api/media/${mediaId}`;
 }
 
-export function getMedia(mediaId: string): MediaRow | undefined {
-  return db.prepare('SELECT * FROM media WHERE media_id = ?').get(mediaId) as MediaRow | undefined;
+export function getMedia(mediaId: string, learnerId = currentLearnerId()): MediaRow | undefined {
+  return db
+    .prepare('SELECT * FROM media WHERE media_id = ? AND learner_id = ?')
+    .get(mediaId, learnerId) as unknown as MediaRow | undefined;
 }
 
-export function getMediaByHash(hash: string): MediaRow | undefined {
-  return db.prepare('SELECT * FROM media WHERE hash = ? ORDER BY created_at LIMIT 1').get(hash) as
-    | MediaRow
-    | undefined;
+export function getMediaByHash(hash: string, learnerId = currentLearnerId()): MediaRow | undefined {
+  return db
+    .prepare('SELECT * FROM media WHERE hash = ? AND learner_id = ? ORDER BY created_at LIMIT 1')
+    .get(hash, learnerId) as unknown as MediaRow | undefined;
 }
 
-export async function removeMedia(mediaId: string): Promise<number> {
-  const row = getMedia(mediaId);
+export async function removeMedia(mediaId: string, learnerId = currentLearnerId()): Promise<number> {
+  const row = getMedia(mediaId, learnerId);
   if (!row) return 0;
-  db.prepare('DELETE FROM media WHERE media_id = ?').run(mediaId);
+  db.prepare('DELETE FROM media WHERE media_id = ? AND learner_id = ?').run(mediaId, learnerId);
   try {
     await unlink(join(mediaDir, row.stored_name));
   } catch {
@@ -118,8 +122,9 @@ export async function saveImage(file: File): Promise<MediaRow> {
   if (!sniffed) {
     throw new MediaError('IMAGE_TYPE', '仅支持 JPG、PNG、WebP 图片', 422);
   }
-  const hash = createHash('sha256').update(buffer).digest('hex');
-  const existing = getMediaByHash(hash);
+  const learnerId = currentLearnerId();
+  const hash = `${learnerId}:${createHash('sha256').update(buffer).digest('hex')}`;
+  const existing = getMediaByHash(hash, learnerId);
   if (existing) {
     try {
       await access(join(mediaDir, existing.stored_name));
@@ -141,9 +146,9 @@ export async function saveImage(file: File): Promise<MediaRow> {
   await writeFile(join(mediaDir, storedName), buffer);
   const filename = (file.name?.trim() || `${mediaId}.${sniffed.ext}`).slice(0, 160);
   db.prepare(
-    `INSERT INTO media (media_id, filename, stored_name, mime, size, hash, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(mediaId, filename, storedName, sniffed.mime, buffer.length, hash, Date.now());
+    `INSERT INTO media (media_id, learner_id, filename, stored_name, mime, size, hash, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(mediaId, learnerId, filename, storedName, sniffed.mime, buffer.length, hash, Date.now());
   return getMedia(mediaId)!;
 }
 

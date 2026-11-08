@@ -10,6 +10,7 @@ services:
       PORT: 3000
       MILVUS_ADDRESS: milvus:19530
       EDU_DATA_DIR: /app/data
+      DOCLING_URL: http://docling-serve:5001
     volumes:
       # SQLite 不能放在 Windows bind mount（9p 无可靠文件锁，node:sqlite 报 disk I/O error），用命名卷
       - app_data:/app/data
@@ -19,6 +20,27 @@ services:
     depends_on:
       milvus:
         condition: service_healthy
+    restart: unless-stopped
+
+  # 扫描件解析主路径。按需启用：npm run docling:up
+  docling-serve:
+    container_name: edu-docling
+    image: ${DOCLING_IMAGE:-ghcr.io/docling-project/docling-serve-cpu:latest}
+    profiles: ["docling"]
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "0"
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+    ports:
+      - "${DOCLING_PORT:-5001}:5001"
+    volumes:
+      # 空卷首次挂载时 Docker 会把镜像内置模型复制进来；公式模型下载到这里可跨重建保留
+      - docling_models:/opt/app-root/src/.cache/docling/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   etcd:
@@ -67,5 +89,6 @@ services:
 
 volumes:
   app_data:
+  docling_models:
   etcd_data:
   milvus_data:

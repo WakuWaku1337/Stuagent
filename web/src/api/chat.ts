@@ -103,6 +103,7 @@ export async function streamChatIn(
     signal,
   });
   if (!res.ok || !res.body) {
+    if (res.status === 401) window.dispatchEvent(new Event('edupi:unauthorized'));
     const data = await res.json().catch(() => null);
     throw new Error(data?.error ?? data?.message ?? `请求失败（${res.status}）`);
   }

@@ -1,6 +1,70 @@
 # 智学 实施进度
 
-当前阶段：阶段 J · S17 补齐（§6.14 统一可视化引擎）已完成（2026-11-08）；下一项为阶段 I · S23 性能优化与压测（待做，见文末）
+当前阶段：S23 性能优化第一批已完成（2026-11-08）；剩余全量压测与独立快模型路由
+
+阶段 I · S23 性能优化第一批已完成（2026-11-08）
+- 缓存：新增 SQLite `embedding_cache`、聊天答案缓存 `answer_cache`、检索语义缓存 `rag/cache.ts`；文档索引/删除时失效检索与答案缓存
+- 检索：短查询跳过 Cross-Encoder；RRFRanker 结果直接使用；RAG 结果按账号语义缓存，命中直接返回
+- 对话：短问题跳过路由模型直接进主讲；短问题默认低思考强度；历史回放从 24 条降到 16 条、单条截断 6000 字
+- 压测：新增 `npm run bench:s23`（RAG 冷/热延迟、缓存命中；`--chat` 测 TTFT/P95）
+- 实测：RAG 冷 965ms → 热 3.7ms（10/10 命中）；聊天冷 TTFT 3.2s → 缓存命中 17ms；答案缓存命中时 SSE 仍正常返回 conversation/route/citations/delta/done
+- 验证：`check-isolation.ts` ALL PASS（含刚索引后的 RAG 可见性重试）；`check-auth.ts` ALL PASS；服务端类型检查无新增错误
+- 剩余：独立“快模型”分级路由尚未接入（当前只做短问题路由跳过 + 低思考强度）；语义缓存目前是检索结果缓存，答案缓存为精确问题+上下文指纹；压测为小样本，未做并发/长会话压测
+
+阶段 K · S34 账号管理与会话安全已完成（2026-11-08）
+- 管理页：新增 `/admin`（侧栏「账号管理」，仅管理员可见/可进）；账号列表、建号、启停、改角色/联系方式、重置密码、临时密码展示与复制
+- 会话与保护：停用账号立即撤销其全部会话；最后一名管理员不能停用或降级；管理员重置密码强制下次改密
+- 审计：认证事件列表（登录、退出、建号、改密、重置、会话撤销等）
+- 上线检查：新增 `/api/admin/system-check`，检查认证开关、管理员、注册入口、HTTPS/Cookie、最近备份；开发 HTTP 会显示“注意”
+- 备份：新增 `npm run backup`，SQLite `VACUUM INTO data/backups/edu-*.db`，可选 `-- --with-uploads`
+- 前端权限：`/admin`、`/settings`、`/mcp`、`/storage` 管理员路由守卫；普通用户侧栏只保留用量统计
+- 验收：`check-admin.ts` ALL PASS（建号、临时密码、停用即失效、停用不能登录、重新启用、最后管理员保护、系统检查）；浏览器实测建号与临时密码弹层；`vue-tsc -b` 与 `npm run build` 通过
+- 部署注意：HTTPS 证书、反向代理与 ICP 备案属于部署操作；当前检查在本地 HTTP 下会提示“注意”，公网部署需补齐
+
+阶段 K · S33 多账号数据隔离已完成（2026-11-08）
+- 请求上下文：新增 `learning/context.ts`（AsyncLocalStorage），`requireAuth` 注入当前 userId/learnerId/role；业务层不再使用全局 `DEFAULT_LEARNER`
+- 数据库：documents/questions/exam_papers/courseware/media/visualizations/tasks/ocr_jobs 补 `learner_id`；`daily_practices` 改 `(learner_id, date)` 联合主键；documents/media hash 加账号前缀，预置可视化用 `__global__`
+- 隔离范围：对话、记忆、错题、掌握度、测验、考试复盘、计划、每日练习、题库、资料/切片/OCR、媒体、可视化、课件、后台任务、用量全部按账号查询；管理员也不能读取他人内容
+- RAG：Milvus 每账号独立 collection；首个账号沿用旧 `edu_chunks`，新账号 `edu_chunks_<id>`；`npm run auth:migrate` 只做检查，`-- --reindex` 才重建向量
+- 权限：模型设置、MCP、存储治理后端 `requireAdmin`；侧栏隐藏、路由 `adminOnly` 拦截；普通用户只看到自己的用量
+- 账号入口：公开注册默认关闭（`REGISTRATION_OPEN=0`）；管理员用 `npm run user:create` 建号，`auth:reset` 重置密码
+- 验收：`check-auth.ts` ALL PASS（注册关闭时跳过注册项）；`check-isolation.ts` ALL PASS（设置权限、记忆、会话、资料、媒体、默认数据归属、RAG 全部通过）；浏览器实测普通用户侧栏无设置/MCP/存储，直接访问 /settings 被重定向；`vue-tsc -b` 与 `npm run build` 通过
+- 注意：管理员账号页面仍属 S34；旧 default 数据自动归属首个管理员；迁移前建议备份 `edu.db` 与 `uploads/`
+
+阶段 K · S32 账号认证与登录页已完成（2026-11-08）
+- 后端：`users` / `sessions` / `auth_events` 表；scrypt 密码（N=32768、r=8、p=1、maxmem=64MB）；HttpOnly 会话 Cookie；登录限流与锁定；审计；首个管理员 `npm run auth:bootstrap`；管理员重置密码 `npm run auth:reset`
+- 接口：`/api/auth/bootstrap|register|login|logout|me|password|sessions|sessions/:id|sessions/revoke-all`；`/api/admin/users|users/:id|users/:id/reset-password|audit`
+- 前端：`/login`、`/register`、`/account`；auth store；路由守卫；401 拦截；账号菜单；SSE/WS 401 跳登录；未登录不探测业务接口
+- 验收：`check-auth.ts` ALL PASS（注册、登录、me、会话、管理员权限、重置密码、强制改密、限流、退出）；`vue-tsc -b` 与 `npm run build` 通过；浏览器实测登录、注册、账号页、退出、受保护路由跳转、WebSocket 已连接
+- 视觉：新增 `AuthLayout`，登录/注册复用主界面的暗色导航栏、纸面网格、宋体标题与蓝色主色；截图 `server/testdata/screens/auth-login.png`、`auth-register-form.png`、`auth-login-mobile.png`
+- 注意：S32 完成时数据隔离尚未实现；该问题已由 S33 补齐。首个管理员需在真实数据目录运行 `npm run auth:bootstrap`
+- 下一步：S34 管理员账号页面与上线最低检查
+
+设计文档 v0.30：账号方案简化为用户名密码（2026-11-08；S32/S33/S34 已实施）
+- 注册只填用户名、密码、手机号/邮箱（可选，不验证）；不做邮箱验证码、邮件找回、CAPTCHA、管理员 2FA、邀请码、按账号配额
+- 保留：服务端会话 + HttpOnly Cookie、scrypt 密码、登录限流、数据隔离、管理员建号/停用/重置密码、HTTPS 与每日备份最低要求
+- 任务编号：阶段 K · S32 用户名密码认证、S33 数据隔离与迁移、S34 账号管理与会话安全；里程碑 7 改为 S34，取消 S35
+- 文档：§6.16 精简、§6.17 收敛为上线最低要求、§9.4 收敛为公网部署最低配置；§7.3 去掉 email_tokens/user_quotas/TOTP
+- 下一步：未开始编码；实施顺序 S32 → S33 → S34
+
+设计文档 v0.29（历史）：曾按公网个人网站标准扩展邮箱验证、邮件 DNS、CAPTCHA、2FA、配额与完整上线清单；因当前只需要简单登录，已在 v0.30 收回
+
+设计文档 v0.28（历史）：初版账号方案，按本地单机口径设计；已被 v0.30 的简单账号密码方案取代
+- 新增 §5.9 认证架构、§6.16 用户注册登录、§7.3 账号数据表与迁移；调整 §1.2/§1.4/§2/§3.1/§3.2/§10/§12
+- 方案：服务端会话 + HttpOnly Cookie，密码用 Node `crypto.scrypt`；首个管理员 CLI 初始化；`learner_id = user_id` 实现个人数据隔离；模型密钥/MCP/存储为实例级仅管理员可操作
+- 迁移要点：`daily_practices` 改联合主键、`documents` 改 `(learner_id, hash)` 唯一、Milvus 每账号独立 collection、`DEFAULT_LEARNER` 改为请求上下文
+
+设计文档 v0.27：扫描件 OCR 切换到 Docling 主路径已完成（2026-11-08）
+- 方案：Docling 作为扫描件唯一主路径，不再保留整篇自建兜底；`OCR_ENGINE=auto`（默认）走 docling-serve + 低置信/公式密集页视觉增强，`docling` 只用 Docling；旧逐页 OCR、RapidOCR 桥接与 `vision|local` 模式已删除（2026-11-08）
+- 服务：compose 新增 `docling-serve`（profile `docling`，宿主 5001）；`npm run docling:up/down` 启停，`npm run docling:models` 下载公式模型到命名卷 `docling_models`。CPU 镜像压缩 2.1GB、本地展开 7.57GB，基础模型已内置；本机直连 GHCR/Quay 过慢，`docker/.env` 用南京大学镜像 `ghcr.nju.edu.cn/docling-project/docling-serve-cpu:latest`，可用官方的 `ghcr.io/docling-project/docling-serve-cpu:latest` 覆盖
+- 适配：`server/src/documents/docling.ts` 提交 `/v1/convert/file/async`、轮询 `/v1/status/poll`、读取 `/v1/result`；请求 md+json、`md_page_break_placeholder`、`do_ocr`；按占位符切逐页 Markdown，逐页 confidence 取 `ocr_score`（layout 分低不再误判待校对）；成功后结果缓存 `uploads/ocr/<id>/docling.json`，重试复用；转换中途重启会重新提交
+- 增强：OCR 置信度 <0.8 或单页未解码公式 ≥10 处的页面走视觉模型单页增强，engine 记为 `docling+vision`；视觉失败保留 Docling 结果。`OCR_VISION_FORMULA_MIN_MARKERS` 可调（0 关闭公式增强），`DOCLING_OCR_ENGINE`、`DOCLING_TIMEOUT_MS`、`DOCLING_POLL_MS` 可配
+- 进度/前端：整篇转换期间任务显示“整篇解析中”；逐页原文图仍由 pdfjs 200 DPI 渲染供校对；旧逐页缓存与校对写回链路不变
+- 验收：`check-docling.ts` 2 页样本 15.2s，p1 0.98 / p2 0.63；`check-ocr.ts` ALL PASS（p1 docling 0.98、p2 docling+vision，校对写回 5 切片并入库）；单页 PDF 走 JSON 降级，1 页 0.98；Docling 停服时任务明确失败并提示 `npm run docling:up`；旧链路删除后 `check-ocr` 仍 ALL PASS
+- 108 页全链路（force 重试复用 Docling 缓存）：691s，82 页 docling + 26 页 docling+vision，0 页待校对，413 切片并 indexed；切片中 28 个含 Markdown 表格、136 个含 `[公式]`、114 个含 `[图]`
+- Docker：重建镜像后 `APP_PORT=3100` 容器带 `DOCLING_URL=http://docling-serve:5001`，`check-ocr` ALL PASS；`regression.ts` ALL PASS；`vue-tsc -b` 通过
+- 公式增强：模型 `ibm-granite/granite-docling-258M`（506MB）已通过 `npm run docling:models` 下载到命名卷 `docling_models`，容器重建保留；`do_formula_enrichment=true` 实测可用（公式占位 0、88 个 LaTeX 块），但 CPU 约 **82s/页**（2 页 163s）且部分 LaTeX 结构不稳，**默认关闭**，需 `DOCLING_FORMULA_ENRICHMENT=1` 显式启用；默认仍用视觉模型增强公式密集页
+- 关键文件：`server/src/documents/docling.ts`、`server/src/documents/pdf-ocr.ts`、`server/scripts/check-docling.ts`、`docker/docker-compose.yml`、`web/src/views/DocumentsView.vue`
 
 可视化改为题目内容确定性建模（2026-11-08）
 - 移除 `visualize-engine.ts` 里的 `chatJson` 判定与 LLM 生成 spec；`POST /api/visualize/generate` 与对话自动可视化现在只走后端规则解析，不消耗模型调用
@@ -13,7 +77,7 @@
 - 截图：`server/testdata/screens/viz-printer.png`、`viz-function.png`、`viz-conic.png`、`viz-cube.png`
 - 限制：确定性解析不是通用 CAS/几何求解器，任意坐标系、复杂线面角证明、未收录分子和特殊物理装置需要补充解析规则或手动传 type+spec；等高线/三维函数仍以预置或手动 spec 为主
 
-设计文档补做：扫描件 OCR（§6.8.8 / 第 14 章 S05）已完成（2026-11-08）
+设计文档补做：扫描件 OCR（§6.8.8 / 第 14 章 S05）已完成（2026-11-08，以下为 v0.26 自建 OCR 记录；v0.27 已由 Docling 替换并删除旧链路，保留作历史）
 - 判定：逐页提取文本 + OperatorList 大图覆盖率，正文 <30 字且整页图 ≥40% 记为需 OCR；需 OCR 页 ≥50% 判为图片型 PDF。实测 24.7MB / 108 页全位图资料：0 字、108/108 页需 OCR、判定 scanned=true；`testdata/chemistry.pdf` 等文本 PDF 仍走同步文本路径（200 parsed，2 切片）
 - 渲染：`pdfjs-dist` + `@napi-rs/canvas`，默认 200 DPI（`OCR_DPI` 150–320）；页面 JPEG 落 `uploads/ocr/<id>/`，实测 1275×1651 的扫描页渲染为 3542×4587（约 0.56–0.97MB/页），原图接口可缓存读取
 - 引擎：`OCR_ENGINE=auto|vision|local`。视觉模型整页输出 Markdown + LaTeX（本资料推荐）；本地 RapidOCR 经 `scripts/rapidocr_bridge.py` 接入，未安装时回退视觉模型；本地置信度低或公式密度高时升级视觉模型（`local+vision`）
@@ -128,7 +192,7 @@
 
 历史：H 进阶、安全与收尾 —— 已完成（S17 统一可视化与安全、S18 验收通过）；已增加 Docker 本地部署
 旧编号 S19/S20（模型设置、用量统计）已于 2026-11-07 完成，见下方验收证据
-已完成：S01–S22 与 S24–S31（A–H + 阶段 I 的 S19–S22 + 阶段 J 扩展批次）；S23 性能优化与压测尚未实施
+已完成：S01–S22 与 S24–S31（A–H + 阶段 I 的 S19–S22 + 阶段 J 扩展批次），以及设计文档 v0.27 的 Docling 扫描件迁移；S23 性能优化与压测尚未实施
 下一步：阶段 I · S23 性能优化与压测（里程碑 6：TTFT/P95 达标、语义缓存生效）；解题视频按 §3.2 外接 MCP 后置，不在本期自研
 
 关键文件/接口：
@@ -352,6 +416,7 @@
 
 设计文档功能审计（2026-11-07，对照 §3.1/§5.8.2/§6.1–§6.14）：
 - 已覆盖：S01–S22、S24–S31；P0/P1 主链路全部落地，P2 安全、统一可视化（§6.14 已合并落地）、MCP 已完成，回归 45/45 PASS。
+- 已完成｜扫描件 OCR（§6.8 / 设计文档 v0.27）：Docling 主路径 + 低置信/公式密集页视觉增强已落地（2026-11-08）。
 - 待做｜性能优化与压测（S23，§6.15 + 第 14 章 S23）：语义缓存、模型分级路由、上下文精简、Cross-Encoder 裁剪与 TTFT/P95 压测尚未实施，对应里程碑 6（延迟达标）。P0 提速措施（流式、快模型、精简上下文）自 S04 起已在执行。
 - 已完成｜学习计划（S24）、回复完整性（S25）、每日练习（S26）、文件夹导入（S27）、难度校准与复习提醒（S28）、MCP（S29）、自动可视化（S30）、3D 课件/技能/存储镜像（S31）。
 - 未实现（主动裁剪）｜解题视频（§3.1 P2）：§3.2 明确完整视频管线不在本期自研，优先外部 MCP；本版本不提供视频生成。
@@ -362,8 +427,11 @@
 遗留问题与风险：
 - GitHub 直连依赖 SteamTools TLS 代理 + 仓库级 CA；gh 尚未登录，triage 标签未创建；本地历史与远程初始提交不相关，尚未推送
 - 复盘识别暂无人工校对界面（扫描件 OCR 已有逐页校对；复盘题图识别仍未接入）
-- 扫描件 OCR 默认走视觉模型：单页实测约 10–30s，长文档需数十分钟；本地 RapidOCR 桥接脚本已提供，但当前环境未安装 rapidocr/onnxruntime，离线部署需自行安装
-- OCR 页面原图按 200 DPI 保存（模糊扫描页实测约 0.56–0.97MB/页），大批量扫描件会明显增加 uploads 占用；删除资料会同步清理 OCR 原图
+- 扫描件 OCR 依赖 docling-serve：未启动时扫描件上传直接失败并提示 `npm run docling:up`；CPU 版 108 页实测约 317s、峰值内存约 4.3GB，长文档需排队等待
+- 公式增强默认关闭：`granite-docling-258M` 可下载，但 CPU 约 82s/页且 LaTeX 偶有结构错乱；默认靠视觉模型补公式密集页（≥10 处占位），整本书可能触发较多视觉调用（可用 `OCR_VISION_FORMULA_MIN_MARKERS` 调整）
+- Docling 转换任务不跨服务重启续跑：只在成功后写 `docling.json` 缓存，服务中途重启会重新提交整篇转换
+- 国内直连 GHCR/Quay 很慢：本机 `docker/.env` 使用南京大学镜像；换环境可改 `DOCLING_IMAGE`
+- OCR 页面原图按 200 DPI 保存（模糊扫描页实测约 0.56–0.97MB/页），大批量扫描件会明显增加 uploads 占用；删除资料会同步清理 OCR 原图与 Docling 缓存
 - 参考资料会累积低相关项；后台任务单 Worker 串行且失败无重试
 - 会话搜索为 `LIKE`（标题/消息内容），消息量很大时无 FTS 索引；上下文回放只取最近 24 条，超长会话的早期细节可能丢失
 - 同一会话内不同角色仍各用独立 Pi 会话，但会通过 SQLite 历史重建共享上下文；跨会话仅共享画像/记忆/掌握度

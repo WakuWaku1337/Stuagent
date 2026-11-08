@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
-import { DEFAULT_LEARNER } from '../learning/memory.ts';
+import { currentLearnerId } from '../learning/context.ts';
 import type { Citation } from '../rag/service.ts';
 
 export type MessageRole = 'user' | 'assistant';
@@ -98,6 +98,12 @@ const summarySelect = `
       ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) AS preview
   FROM conversations c`;
 
+function ownsConversation(id: string): boolean {
+  return Boolean(
+    db.prepare('SELECT 1 FROM conversations WHERE conversation_id = ? AND learner_id = ?').get(id, currentLearnerId()),
+  );
+}
+
 export function createConversation(title?: string): Conversation {
   const now = Date.now();
   const id = randomUUID();
@@ -105,14 +111,14 @@ export function createConversation(title?: string): Conversation {
   db.prepare(
     `INSERT INTO conversations (conversation_id, learner_id, title, pinned, title_auto, created_at, updated_at)
      VALUES (?, ?, ?, 0, ?, ?, ?)`,
-  ).run(id, DEFAULT_LEARNER, clean || DEFAULT_TITLE, clean ? 0 : 1, now, now);
+  ).run(id, currentLearnerId(), clean || DEFAULT_TITLE, clean ? 0 : 1, now, now);
   return getConversation(id)!;
 }
 
 export function getConversation(id: string): Conversation | undefined {
   const row = db
-    .prepare(`${summarySelect} WHERE c.conversation_id = ?`)
-    .get(id) as ConversationDbRow | undefined;
+    .prepare(`${summarySelect} WHERE c.conversation_id = ? AND c.learner_id = ?`)
+    .get(id, currentLearnerId()) as ConversationDbRow | undefined;
   return row ? toConversation(row) : undefined;
 }
 
@@ -128,7 +134,7 @@ export function listConversations(
          SELECT 1 FROM messages m WHERE m.conversation_id = c.conversation_id AND m.content LIKE ?
        ))`
     : 'c.learner_id = ?';
-  const params: (string | number)[] = q ? [DEFAULT_LEARNER, like, like] : [DEFAULT_LEARNER];
+  const params: (string | number)[] = q ? [currentLearnerId(), like, like] : [currentLearnerId()];
   const total = (
     db.prepare(`SELECT COUNT(*) AS n FROM conversations c WHERE ${where}`).get(...params) as { n: number }
   ).n;
@@ -161,17 +167,16 @@ export function updateConversation(
     values.push(patch.pinned ? 1 : 0);
   }
   if (fields.length > 0) {
-    values.push(id);
-    db.prepare(`UPDATE conversations SET ${fields.join(', ')} WHERE conversation_id = ?`).run(...values);
+    values.push(id, currentLearnerId());
+    db.prepare(`UPDATE conversations SET ${fields.join(', ')} WHERE conversation_id = ? AND learner_id = ?`).run(...values);
   }
   return getConversation(id);
 }
 
 export function deleteConversation(id: string): boolean {
-  const existing = db.prepare('SELECT conversation_id FROM conversations WHERE conversation_id = ?').get(id);
-  if (!existing) return false;
+  if (!ownsConversation(id)) return false;
   db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id);
-  db.prepare('DELETE FROM conversations WHERE conversation_id = ?').run(id);
+  db.prepare('DELETE FROM conversations WHERE conversation_id = ? AND learner_id = ?').run(id, currentLearnerId());
   return true;
 }
 
@@ -189,8 +194,8 @@ export function addMessage(
   },
 ): Message {
   const conversation = db
-    .prepare('SELECT * FROM conversations WHERE conversation_id = ?')
-    .get(conversationId) as
+    .prepare('SELECT * FROM conversations WHERE conversation_id = ? AND learner_id = ?')
+    .get(conversationId, currentLearnerId()) as
     | { title: string; title_auto: number }
     | undefined;
   if (!conversation) throw new Error('会话不存在');
@@ -219,17 +224,19 @@ export function addMessage(
     title = input.title?.trim() || titleFromMessage(input.content);
     titleAuto = 0;
   }
-  db.prepare('UPDATE conversations SET title = ?, title_auto = ?, updated_at = ? WHERE conversation_id = ?').run(
+  db.prepare('UPDATE conversations SET title = ?, title_auto = ?, updated_at = ? WHERE conversation_id = ? AND learner_id = ?').run(
     title,
     titleAuto,
     now,
     conversationId,
+    currentLearnerId(),
   );
 
   return db.prepare('SELECT * FROM messages WHERE message_id = ?').get(id) as unknown as Message;
 }
 
 export function lastMessageByRole(conversationId: string, role: MessageRole): Message | undefined {
+  if (!ownsConversation(conversationId)) return undefined;
   return db
     .prepare(
       `SELECT * FROM messages WHERE conversation_id = ? AND role = ?
@@ -239,13 +246,22 @@ export function lastMessageByRole(conversationId: string, role: MessageRole): Me
 }
 
 export function deleteMessage(messageId: string): boolean {
-  return db.prepare('DELETE FROM messages WHERE message_id = ?').run(messageId).changes > 0;
+  return (
+    db
+      .prepare(
+        'DELETE FROM messages WHERE message_id = ? AND conversation_id IN (SELECT conversation_id FROM conversations WHERE learner_id = ?)',
+      )
+      .run(messageId, currentLearnerId()).changes > 0
+  );
 }
 
 export function setMessageVisualization(messageId: string, visualizationId: string): boolean {
   return (
-    db.prepare('UPDATE messages SET visualization_id = ? WHERE message_id = ?').run(visualizationId, messageId)
-      .changes > 0
+    db
+      .prepare(
+        'UPDATE messages SET visualization_id = ? WHERE message_id = ? AND conversation_id IN (SELECT conversation_id FROM conversations WHERE learner_id = ?)',
+      )
+      .run(visualizationId, messageId, currentLearnerId()).changes > 0
   );
 }
 
@@ -253,6 +269,7 @@ export function listMessages(
   conversationId: string,
   options: { limit?: number; before?: string } = {},
 ): MessagePage {  const limit = clamp(options.limit ?? 30, 1, 100);
+  if (!ownsConversation(conversationId)) throw new Error('会话不存在');
   let cursor: { created_at: number; rid: number } | undefined;
   if (options.before) {
     cursor = db

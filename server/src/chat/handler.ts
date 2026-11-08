@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { chat, type ChatEvent, type ChatHistoryItem, type ChatImage } from '../pi.ts';
@@ -30,6 +31,9 @@ import { generateVisualization, shouldAutoVisualize } from '../learning/visualiz
 import { getUnifiedVisualization, type UnifiedVisualization } from '../learning/visualize.ts';
 import { modelOrDefault, modelSupportsVision } from '../settings/providers.ts';
 import { getSettings } from '../settings/store.ts';
+import { profileContext } from '../learning/memory.ts';
+import { currentLearnerId } from '../learning/context.ts';
+import { getAnswerCache, putAnswerCache } from './answer-cache.ts';
 
 export interface ChatBody {
   message?: string;
@@ -68,6 +72,44 @@ function mediaErrorResponse(c: Context, error: unknown): Response | null {
   return null;
 }
 
+/** 短小事实型问题默认降低思考强度；复杂题仍沿用设置或用户指定。 */
+function inferReasoning(
+  text: string,
+  requested: string | undefined,
+): 'low' | 'medium' | 'high' | undefined {
+  if (requested === 'low' || requested === 'medium' || requested === 'high') return requested;
+  const clean = text.trim();
+  if (!clean || clean.length > 32) return undefined;
+  if (/[证明求解计算方程函数几何电路受力分析比较步骤推导]/.test(clean)) return undefined;
+  if (/[?？]/.test(clean) && clean.length > 24) return undefined;
+  return 'low';
+}
+
+function answerCacheKey(input: {
+  message: string;
+  agent: string;
+  reasoning: string;
+  provider: string;
+  model: string;
+  history: ChatHistoryItem[];
+}): string {
+  const historyText = input.history.map((item) => `${item.role}:${item.content}`).join('\n');
+  return createHash('sha256')
+    .update(
+      [
+        currentLearnerId(),
+        input.provider,
+        input.model,
+        input.agent,
+        input.reasoning,
+        input.message,
+        historyText,
+        profileContext(),
+      ].join('\0'),
+    )
+    .digest('hex');
+}
+
 async function loadImageContent(rows: MediaRow[]): Promise<ChatImage[]> {
   return Promise.all(
     rows.map(async (row) => {
@@ -82,7 +124,8 @@ async function buildHistory(
   excludeMessageId: string,
   vision: boolean,
 ): Promise<ChatHistoryItem[]> {
-  const items = listMessages(conversationId, { limit: 24 }).messages.filter(
+  const limit = Math.min(60, Math.max(4, Number(process.env.CHAT_HISTORY_LIMIT ?? 16)));
+  const items = listMessages(conversationId, { limit }).messages.filter(
     (item) => item.message_id !== excludeMessageId,
   );
   const history: ChatHistoryItem[] = [];
@@ -124,7 +167,7 @@ async function buildHistory(
 
     history.unshift({
       role: item.role,
-      content,
+      content: content.length > 6000 ? `${content.slice(0, 6000)}…` : content,
       created_at: item.created_at,
       ...(images ? { images } : {}),
     });
@@ -336,11 +379,6 @@ export async function handleChat(
   }
   if (!message && mediaIds.length === 0) return c.json({ error: 'message 或图片不能为空' }, 400);
 
-  const reasoning =
-    body.reasoning === 'low' || body.reasoning === 'medium' || body.reasoning === 'high'
-      ? body.reasoning
-      : undefined;
-
   const guard = checkInput(message);
   if (guard.blocked) {
     return c.json({ code: 'SECURITY_BLOCKED', message: guard.reason, matches: guard.matches }, 400);
@@ -377,6 +415,7 @@ export async function handleChat(
   const baseText = safeMessage || fallbackText;
   const modelInput = [baseText, ocrBlock].filter(Boolean).join('\n\n');
   const routeText = [safeMessage, ocrText.slice(0, 1200)].filter(Boolean).join('\n') || fallbackText;
+  const reasoning = inferReasoning(modelInput, body.reasoning);
 
   let conversation = preset;
   if (!conversation) {
@@ -414,6 +453,79 @@ export async function handleChat(
     ocr_text: ocrText || undefined,
     attachments,
   };
+
+  const canCacheAnswer =
+    mediaIds.length === 0 &&
+    !ocrText &&
+    !history.some((item) => item.images?.length) &&
+    !shouldAutoVisualize(routeText, false);
+  const cacheKey = canCacheAnswer
+    ? answerCacheKey({
+        message: modelInput,
+        agent: decision.agent,
+        reasoning: reasoning ?? settings.reasoning,
+        provider: settings.provider,
+        model: settings.model,
+        history,
+      })
+    : '';
+  const cachedAnswer = cacheKey ? getAnswerCache(cacheKey) : null;
+  if (cachedAnswer) {
+    const cachedText = filterOutput(cachedAnswer.answer).text;
+    if (cachedText.trim()) {
+      try {
+        addMessage(conversation.conversation_id, {
+          role: 'assistant',
+          content: cachedText,
+          agent: AGENTS[decision.agent].name,
+          citations: cachedAnswer.citations,
+        });
+      } catch {
+        // 会话在缓存命中期间被删除时忽略
+      }
+      if (body.stream) {
+        return streamSSE(c, async (stream) => {
+          await stream.writeSSE({ event: 'conversation', data: JSON.stringify(conversationInfo) });
+          await stream.writeSSE({ event: 'media', data: JSON.stringify({ type: 'media', ...mediaInfo }) });
+          await stream.writeSSE({
+            event: 'route',
+            data: JSON.stringify({
+              type: 'route',
+              agent: decision.agent,
+              agent_name: AGENTS[decision.agent].name,
+              reason: `${decision.reason} · 缓存命中`,
+            }),
+          });
+          if (redacted.hits.length > 0) {
+            await stream.writeSSE({ event: 'security', data: JSON.stringify({ type: 'security', ...securityInfo }) });
+          }
+          if (cachedAnswer.citations.length > 0) {
+            await stream.writeSSE({
+              event: 'citations',
+              data: JSON.stringify({ type: 'citations', citations: cachedAnswer.citations }),
+            });
+          }
+          await stream.writeSSE({ event: 'delta', data: JSON.stringify({ type: 'delta', text: cachedText }) });
+          await stream.writeSSE({
+            event: 'done',
+            data: JSON.stringify({ type: 'done', text: cachedText, cached: true }),
+          });
+        });
+      }
+      return c.json({
+        sessionId: conversation.conversation_id,
+        conversation_id: conversation.conversation_id,
+        conversation_title: conversation.title,
+        agent: decision.agent,
+        agent_name: AGENTS[decision.agent].name,
+        route_reason: `${decision.reason} · 缓存命中`,
+        reply: cachedText,
+        citations: cachedAnswer.citations,
+        media: mediaInfo,
+        cached: true,
+      });
+    }
+  }
 
   if (body.stream) {
     return streamSSE(c, async (stream) => {
@@ -489,6 +601,7 @@ export async function handleChat(
               const tail = redactor.flush();
               if (tail) emit('delta', { type: 'delta', text: tail });
               persistAssistant(full);
+              if (canCacheAnswer) putAnswerCache(cacheKey, full, citations);
               emit('done', { type: 'done', text: full });
               return;
             }
@@ -530,6 +643,7 @@ export async function handleChat(
     const filtered = filterOutput(raw);
     let assistantMessageId = '';
     if (filtered.text.trim()) {
+      if (canCacheAnswer) putAnswerCache(cacheKey, filtered.text, citations);
       try {
         assistantMessageId = addMessage(conversation.conversation_id, {
           role: 'assistant',

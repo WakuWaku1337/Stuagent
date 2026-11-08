@@ -1,5 +1,5 @@
 import { db } from '../store.ts';
-import { DEFAULT_LEARNER } from './memory.ts';
+import { currentLearnerId } from './context.ts';
 import { listMastery } from './mastery.ts';
 import { listWrongRecords } from './wrongbook.ts';
 import { answerQuestion, generateQuiz, sessionInfo, sessionQuestionIds, startSession, type GradeResult } from './quiz.ts';
@@ -102,7 +102,7 @@ function dailyCount(): number {
 function getRow(date: string): DailyRow | undefined {
   return db
     .prepare('SELECT * FROM daily_practices WHERE date = ? AND learner_id = ?')
-    .get(date, DEFAULT_LEARNER) as unknown as DailyRow | undefined;
+    .get(date, currentLearnerId()) as unknown as DailyRow | undefined;
 }
 
 function updateRow(
@@ -124,7 +124,7 @@ function updateRow(
     values.push(patch.finished_at);
   }
   if (fields.length === 0) return getRow(date);
-  values.push(date, DEFAULT_LEARNER);
+  values.push(date, currentLearnerId());
   db.prepare(`UPDATE daily_practices SET ${fields.join(', ')} WHERE date = ? AND learner_id = ?`).run(...values);
   return getRow(date);
 }
@@ -153,11 +153,11 @@ function parseSnapshotPoint(raw: string): string {
 }
 
 export function dailyFocusPoints(): string[] {
-  const weak = listMastery(DEFAULT_LEARNER)
+  const weak = listMastery(currentLearnerId())
     .filter((row) => row.probability < 0.85)
     .slice(0, 3)
     .map((row) => row.knowledge_point);
-  const due = listWrongRecords(DEFAULT_LEARNER, true)
+  const due = listWrongRecords(currentLearnerId(), true)
     .map((row) => parseSnapshotPoint(row.question_snapshot))
     .filter(Boolean);
   const points = [...new Set([...weak, ...due])].slice(0, 3);
@@ -165,8 +165,8 @@ export function dailyFocusPoints(): string[] {
 }
 
 function pickFromBank(points: string[], count: number, subject?: string): QuestionRow[] {
-  const clauses = [`knowledge_point IN (${points.map(() => '?').join(',')})`];
-  const values: (string | number)[] = [...points];
+  const clauses = [`learner_id = ?`, `knowledge_point IN (${points.map(() => '?').join(',')})`];
+  const values: (string | number)[] = [currentLearnerId(), ...points];
   if (subject) {
     clauses.push('subject = ?');
     values.push(subject);
@@ -184,8 +184,8 @@ async function selectQuestions(points: string[], count: number, subject?: string
   const fillFromBank = (limit: number) => {
     if (limit <= 0) return;
     const rows = db
-      .prepare('SELECT * FROM questions ORDER BY RANDOM() LIMIT ?')
-      .all(limit) as unknown as QuestionRow[];
+      .prepare('SELECT * FROM questions WHERE learner_id = ? ORDER BY RANDOM() LIMIT ?')
+      .all(currentLearnerId(), limit) as unknown as QuestionRow[];
     for (const row of rows) {
       if (seen.has(row.question_id)) continue;
       selected.push(row);
@@ -238,7 +238,7 @@ function answeredIds(sessionId: string): string[] {
 export function dailyStreak(date = isoDate()): number {
   const rows = db
     .prepare("SELECT date FROM daily_practices WHERE learner_id = ? AND status = 'completed' ORDER BY date DESC LIMIT 400")
-    .all(DEFAULT_LEARNER) as unknown as { date: string }[];
+    .all(currentLearnerId()) as unknown as { date: string }[];
   const completed = new Set(rows.map((row) => row.date));
   let cursor = date;
   if (!completed.has(cursor)) cursor = previousDate(cursor, 1);
@@ -256,7 +256,7 @@ export function dailyHistory(limit = 7): DailyHistoryItem[] {
       `SELECT date, status, score, total FROM daily_practices
        WHERE learner_id = ? ORDER BY date DESC LIMIT ?`,
     )
-    .all(DEFAULT_LEARNER, limit) as unknown as DailyHistoryItem[];
+    .all(currentLearnerId(), limit) as unknown as DailyHistoryItem[];
 }
 
 export function getDailyOverview(): DailyOverview {
@@ -271,7 +271,7 @@ export function getDailyOverview(): DailyOverview {
     history: dailyHistory(),
     recommendation: {
       focus_points: dailyFocusPoints(),
-      due_wrong: listWrongRecords(DEFAULT_LEARNER, true).length,
+      due_wrong: listWrongRecords(currentLearnerId(), true).length,
     },
   };
 }
@@ -305,7 +305,7 @@ export async function startDaily(subject?: string): Promise<StartDailyResult> {
   db.prepare(
     `INSERT INTO daily_practices (date, learner_id, session_id, total, status, score, created_at, finished_at)
      VALUES (?, ?, ?, ?, 'active', NULL, ?, NULL)`,
-  ).run(date, DEFAULT_LEARNER, sessionId, questions.length, now);
+  ).run(date, currentLearnerId(), sessionId, questions.length, now);
   return {
     practice: getRow(date)!,
     questions: questions.map(toDailyQuestion),

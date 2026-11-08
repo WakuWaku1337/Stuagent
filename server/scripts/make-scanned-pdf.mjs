@@ -71,7 +71,10 @@ function pdfWithImages(images, width, height) {
   return Buffer.concat(chunks);
 }
 
-const pdf = pdfWithImages([crisp, blurry], Math.ceil(viewport.width), Math.ceil(viewport.height));
+const onePage = process.argv.includes('--one-page');
+const images = onePage ? [crisp] : [crisp, blurry];
+const out = onePage ? 'testdata/scanned-one-page.pdf' : 'testdata/scanned-sample.pdf';
+const pdf = pdfWithImages(images, Math.ceil(viewport.width), Math.ceil(viewport.height));
 await mkdir('testdata', { recursive: true });
-await writeFile('testdata/scanned-sample.pdf', pdf);
-console.log(`testdata/scanned-sample.pdf ${pdf.length} bytes, page ${canvas.width}x${canvas.height}`);
+await writeFile(out, pdf);
+console.log(`${out} ${pdf.length} bytes, page ${canvas.width}x${canvas.height}, ${images.length} page(s)`);

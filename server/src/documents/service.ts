@@ -16,6 +16,7 @@ import { checkStorageQuota } from '../storage/quota.ts';
 import { chunkBlocks } from './chunker.ts';
 import { detectEncoding, parseDoc, parseDocx, parseMarkdown, parsePdf, parseText, type ParsedBlock } from './parsers.ts';
 import { analyzePdf, removeOcrFiles, startOcrJob } from './pdf-ocr.ts';
+import { currentLearnerId } from '../learning/context.ts';
 
 export const uploadDir = uploadsDir;
 mkdir(uploadDir, { recursive: true }).catch(() => {});
@@ -113,8 +114,9 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  const hash = createHash('sha256').update(buffer).digest('hex');
-  const existing = findDocumentByHash(hash);
+  const learnerId = currentLearnerId();
+  const hash = `${learnerId}:${createHash('sha256').update(buffer).digest('hex')}`;
+  const existing = findDocumentByHash(hash, learnerId);
   if (existing) {
     throw new DocumentError(409, 'DOCUMENT_EXISTS', '重复上传（哈希命中）', {
       filename,
@@ -129,6 +131,7 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
   }
   insertDocument({
     document_id: documentId,
+    learner_id: learnerId,
     filename,
     file_type: ext.slice(1),
     size: buffer.length,

@@ -17,11 +17,16 @@
 ```bash
 npm install
 npm run milvus:up      # 启动 Milvus（19530），健康检查：npm run milvus:health
+npm run docling:up     # 扫描件 OCR：启动 docling-serve（5001，CPU 版镜像较大）
+npm run docling:models # 可选：下载公式增强模型（CPU 推理约 80s/页，默认不启用）
 npm run asr:model      # 首次启用语音输入：下载本地 ASR 模型（约 82MB，写入 server/models，不入库）
+npm run auth:bootstrap # 首次启动：创建管理员（用户名/密码/手机号邮箱可选）
 npm run dev            # 并行启动 server(3000) 与 web(5173)
 ```
 
-浏览器访问 http://localhost:5173 ，首页展示后端 `/health` 联通状态。
+浏览器访问 http://localhost:5173 ，先登录，再进入学习台。未初始化时登录页会提示先运行 `npm run auth:bootstrap`。公开注册默认关闭；管理员用 `npm run user:create` 建号，或在侧栏「账号管理」页建号、停用、重置密码并查看上线检查。确需开放注册时设置 `REGISTRATION_OPEN=1`。各账号的资料、对话、媒体、后台任务与 RAG 已按账号隔离。
+
+> 认证默认开启（`AUTH_ENABLED=1`）。跑隔离回归时可对测试服务设置 `AUTH_ENABLED=0`；对开启认证的服务运行 `regression.ts` 时设置 `AUTH_USER` / `AUTH_PASSWORD`。
 
 ## 常用命令
 
@@ -31,15 +36,41 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | `npm run dev:server` | 仅后端（node --watch + jiti 直跑 TS） |
 | `npm run dev:web` | 仅前端（Vite） |
 | `npm run build` | 构建前端 |
+| `npm run auth:bootstrap` | 创建首个管理员（仅首次） |
+| `npm run user:create` | 管理员建号（默认关闭注册时使用） |
+| `npm run auth:reset` | 管理员/CLI 重置指定账号密码 |
+| `npm run auth:check` | 认证自检（需运行中的服务与测试账号） |
+| `npm run auth:isolation` | A/B 账号数据隔离自检 |
+| `npm run auth:admin-check` | 管理员建号/停用/重置/最后管理员保护自检 |
+| `npm run backup` | SQLite 备份到 data/backups；加 `-- --with-uploads` 同时备份 uploads |
+| `npm run bench:s23` | RAG 冷/热延迟与缓存命中；加 `-- --chat` 测 TTFT/P95 |
+| `npm run auth:migrate` | 账号迁移检查；加 `-- --reindex` 强制重建向量 |
 | `npm run milvus:up / milvus:down` | 启停 Milvus |
 | `npm run milvus:health` | Milvus 健康检查（9091/healthz） |
+| `npm run docling:up / docling:down` | 启停扫描件 OCR 服务 docling-serve（5001） |
+| `npm run docling:models` | 下载 Docling 公式增强模型到命名卷（可选） |
 | `node --import jiti/register scripts/check-rag.ts all` | RAG 自检：建集合 → 灌库 → 检索（在 server 目录运行） |
+
+## 性能相关配置
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `ANSWER_CACHE_TTL_MIN` | 60 | 精确答案缓存有效期，0 关闭 |
+| `RAG_CACHE_TTL_MIN` / `RAG_CACHE_THRESHOLD` | 10 / 0.96 | 检索语义缓存有效期与余弦阈值 |
+| `EMBEDDING_CACHE_DAYS` | 30 | embedding 缓存保留天数 |
+| `CHAT_HISTORY_LIMIT` | 16 | 回放历史条数 |
+| `RERANK_MIN_QUERY_CHARS` | 16 | 短于此长度的查询跳过 Cross-Encoder |
+| `ROUTE_LLM_MIN_CHARS` | 24 | 短于此长度的问题跳过路由模型 |
 
 ## 接口速览
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /health | 健康检查 |
+| POST | /api/auth/register | 注册（用户名、密码、手机号/邮箱可选） |
+| POST | /api/auth/login | 登录，建立 HttpOnly 会话 |
+| POST | /api/auth/logout | 退出当前会话 |
+| GET | /api/auth/me | 当前账号；`AUTH_ENABLED=0` 时返回 `user:null` |
 | GET | /api/model | 当前模型与配置状态 |
 | POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/media/route/delta/citations/continuation/incomplete/done/error）；支持 `mediaIds` 图片输入；无 conversationId 时自动建会话 |
 | POST | /api/conversations/:id/messages | 在指定会话继续对话；`continue:true` 从断点续写、`regenerate:true` 重新生成上一条回复 |
@@ -108,7 +139,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 
 资料库：支持多文件与文件夹批量导入（`webkitdirectory` 或拖拽文件夹），相对路径写入 `source_path` 并作为切片章节前缀；单次最多 50 个文件 / 200MB，前端文件夹上限 100 个 / 300MB。
 
-扫描件：自动判定图片型 PDF（逐页正文长度 + 整页大图覆盖），按 200 DPI 渲染后逐页 OCR；视觉模型直接输出 Markdown + LaTeX（复杂版面/公式推荐），也可装本地 RapidOCR 走离线路径（`OCR_ENGINE=auto|vision|local`，`scripts/rapidocr_bridge.py`）。多页异步执行，`GET /api/documents/:id/ocr` 显示进度；逐页缓存、服务重启可续。按模型自评 + 乱码/重复 + 图像清晰度逐页打分，低于 0.8 标记待校对；资料库校对弹层左侧原文图、右侧 Markdown，全部校对后写回并重新切片入库。相关配置：`OCR_DPI`（默认 200）、`OCR_CONCURRENCY`（默认 2）、`OCR_CONFIDENCE_THRESHOLD`（默认 0.8）、`OCR_TIMEOUT_MS`、`OCR_LOCAL_PYTHON`。
+扫描件：自动判定图片型 PDF（逐页正文长度 + 整页大图覆盖）后交给 docling-serve 整篇转换（先 `npm run docling:up`）。Docling 输出逐页 Markdown、表格与逐页 confidence；低于阈值或公式密集的页面再用视觉模型做单页增强（`OCR_ENGINE=auto|docling|docling+vision`，旧逐页 OCR 链路已移除）。多页异步执行，`GET /api/documents/:id/ocr` 显示进度；渲染的原图用于校对，转换成功后的结果缓存在 `uploads/ocr/<id>/docling.json`，重试复用；转换中途重启会重新提交整篇转换。低于 0.8 标记待校对；资料库校对弹层左侧原文图、右侧 Markdown，全部校对后写回并重新切片入库。配置：`DOCLING_URL`（默认 `http://localhost:5001`）、`DOCLING_OCR_ENGINE`（默认 `auto`）、`DOCLING_TIMEOUT_MS`（默认 30 分钟）、`DOCLING_POLL_MS`、`OCR_CONFIDENCE_THRESHOLD`（默认 0.8）、`OCR_VISION_FORMULA_MIN_MARKERS`（Docling 页未解码公式数阈值，默认 10，设 0 关闭公式增强）、`DOCLING_FORMULA_ENRICHMENT`（设 1 启用 Docling 公式 LaTeX；需先 `npm run docling:models`，CPU 很慢）、`OCR_DPI`（默认 200）。
 
 出题与复习：难度默认“推荐”，按知识点 BKT 掌握度选择基础/中等/拔高；错题到期时顶栏显示“待复习 N”，每天首次打开会弹出复习提醒。
 
@@ -138,7 +169,8 @@ node --import jiti/register scripts/check-plan.ts   # 学习计划（生成、�
 node --import jiti/register scripts/check-continuation.ts # 截断判定、续写拼接与提示词
 node --import jiti/register scripts/check-daily.ts  # 每日练习（生成、作答、完成、连续天数）
 node --import jiti/register scripts/check-documents.ts # 文件夹导入相对路径与章节元数据
-node --import jiti/register scripts/check-ocr.ts    # 扫描件 OCR（判定→进度→原文图→校对写回→重新入库）
+node --import jiti/register scripts/check-ocr.ts    # 扫描件 OCR（判定→Docling→进度→原文图→校对写回→重新入库）
+node --import jiti/register scripts/check-docling.ts [pdf] # Docling 逐页 Markdown / confidence / 耗时
 node --import jiti/register scripts/check-difficulty.ts # 掌握度 → 出题难度校准
 node --import jiti/register scripts/check-mcp.ts    # MCP 服务接入、工具发现/授权/调用与配置同步
 node --import jiti/register scripts/check-visualize.ts # 可视化 spec 校验与表达式求值
@@ -167,7 +199,8 @@ docker compose -f docker/docker-compose.yml stop edu-agent
 ```
 
 - 访问 http://localhost:3000 （API 与前端同端口，WebSocket 走同一端口 `/ws`）；与 `npm run dev` 的 3000 冲突时用 `APP_PORT=3100 docker compose ... up -d edu-agent`，改访问 3100
-- 应用配置读取 `server/.env`（compose `env_file`）；容器内 Milvus 地址为 `milvus:19530`
+- 应用配置读取 `server/.env`（compose `env_file`）；容器内 Milvus 地址为 `milvus:19530`，Docling 地址为 `docling-serve:5001`
+- 扫描件 OCR 需额外启动 `npm run docling:up`（compose profile `docling`，宿主 5001）；镜像默认 CPU 版，国内直连 GHCR/Quay 过慢时可在 `docker/.env` 里用 `DOCLING_IMAGE` 指向镜像源（本机已配置南京大学镜像）
 - 数据持久化：SQLite 与记忆/课件镜像放命名卷 `app_data`（容器内 `/app/data`，由 `EDU_DATA_DIR` 指定），`server/uploads` 以 bind mount 挂载原始文件。**不要把 SQLite 放回 Windows bind mount**：9p 无可靠文件锁，`node:sqlite` 会以 `disk I/O error` 崩溃循环
 - 旧数据迁移：先让宿主机停写并 checkpoint WAL，再灌入卷，例如
   `docker run --rm -v docker_app_data:/data -v "D:\stu\server\data:/src:ro" docker.m.daocloud.io/library/node:24-bookworm-slim sh -c "cp -a /src/edu.db /src/memory /src/courseware /src/pi-agent /data/"`

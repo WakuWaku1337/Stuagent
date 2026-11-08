@@ -7,6 +7,7 @@ import {
   toAttachment,
 } from '../media/service.ts';
 import { runCleanup, storageStats, type CleanupMode } from '../storage/service.ts';
+import { requireAdmin } from '../auth/middleware.ts';
 
 const media = new Hono();
 
@@ -36,9 +37,9 @@ media.post('/upload', async (c) => {
   return c.json(items.length === 1 ? items[0] : { items }, 201);
 });
 
-media.get('/storage', async (c) => c.json(await storageStats()));
+media.get('/storage', requireAdmin, async (c) => c.json(await storageStats()));
 
-media.post('/cleanup', async (c) => {
+media.post('/cleanup', requireAdmin, async (c) => {
   const body = await c.req
     .json<{ mode?: string; olderThanDays?: number; dryRun?: boolean }>()
     .catch(() => null);

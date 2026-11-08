@@ -7,9 +7,23 @@ import 'katex/dist/katex.min.css';
 import './styles/app.css';
 import App from './App.vue';
 import router from './router';
+import { useAuthStore } from './stores/auth';
 
-createApp(App)
-  .use(createPinia())
+const app = createApp(App);
+const pinia = createPinia();
+app.use(pinia);
+
+const auth = useAuthStore(pinia);
+
+window.addEventListener('edupi:unauthorized', () => {
+  auth.user = null;
+  const current = router.currentRoute.value;
+  if (current.meta.public !== true) {
+    void router.push({ name: 'login', query: { redirect: current.fullPath } });
+  }
+});
+
+app
   .use(router)
   .use(ElementPlus, { locale: zhCn })
   .mount('#app');

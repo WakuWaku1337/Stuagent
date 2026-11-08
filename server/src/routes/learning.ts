@@ -4,7 +4,7 @@ import { extractBankFromDocument, generateQuiz, listSessions, recommendDifficult
 import { listBanks, listQuestions, pickRandomQuestions, publicQuestion } from '../learning/questions.ts';
 import { deleteMemory, listMemories, recallMemories, writeMemory } from '../learning/memory.ts';
 import { deleteWrongRecord, dueCount, listWrongRecords, reviewWrongRecord } from '../learning/wrongbook.ts';
-import { DEFAULT_LEARNER } from '../learning/memory.ts';
+import { currentLearnerId } from '../learning/context.ts';
 import { listMastery } from '../learning/mastery.ts';
 import { listChunks } from '../store.ts';
 
@@ -24,11 +24,11 @@ learning.delete('/memory/:id', (c) => {
 
 learning.get('/wrongbook', (c) => {
   const dueOnly = c.req.query('due') === '1';
-  const records = listWrongRecords(DEFAULT_LEARNER, dueOnly).map((r) => ({
+  const records = listWrongRecords(currentLearnerId(), dueOnly).map((r) => ({
     ...r,
     question_snapshot: JSON.parse(r.question_snapshot),
   }));
-  return c.json({ records, due: dueCount(DEFAULT_LEARNER) });
+  return c.json({ records, due: dueCount(currentLearnerId()) });
 });
 learning.post('/wrongbook/:id/review', async (c) => {
   const body = await c.req.json<{ quality?: number }>().catch(() => null);
@@ -45,7 +45,7 @@ learning.delete('/wrongbook/:id', (c) => {
 });
 
 learning.get('/mastery', (c) => {
-  const rows = listMastery(DEFAULT_LEARNER);
+  const rows = listMastery(currentLearnerId());
   return c.json({
     mastery: rows.map((r) => ({ ...r, percent: Math.round(r.probability * 1000) / 10, mastered: r.probability >= 0.95 })),
   });
