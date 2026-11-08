@@ -159,8 +159,10 @@ docker compose -f docker/docker-compose.yml logs -f edu-agent
 docker compose -f docker/docker-compose.yml stop edu-agent
 ```
 
-- 访问 http://localhost:3000 （API 与前端同端口，WebSocket 走同一端口 `/ws`）
+- 访问 http://localhost:3000 （API 与前端同端口，WebSocket 走同一端口 `/ws`）；与 `npm run dev` 的 3000 冲突时用 `APP_PORT=3100 docker compose ... up -d edu-agent`，改访问 3100
 - 应用配置读取 `server/.env`（compose `env_file`）；容器内 Milvus 地址为 `milvus:19530`
-- 数据持久化：`server/data`（SQLite、模型配置）与 `server/uploads`（原始文件）以 bind mount 挂载，重建容器不丢数据
+- 数据持久化：SQLite 与记忆/课件镜像放命名卷 `app_data`（容器内 `/app/data`，由 `EDU_DATA_DIR` 指定），`server/uploads` 以 bind mount 挂载原始文件。**不要把 SQLite 放回 Windows bind mount**：9p 无可靠文件锁，`node:sqlite` 会以 `disk I/O error` 崩溃循环
+- 旧数据迁移：先让宿主机停写并 checkpoint WAL，再灌入卷，例如
+  `docker run --rm -v docker_app_data:/data -v "D:\stu\server\data:/src:ro" docker.m.daocloud.io/library/node:24-bookworm-slim sh -c "cp -a /src/edu.db /src/memory /src/courseware /src/pi-agent /data/"`
 - 语音识别模型不打入 git：构建镜像前先在宿主机运行 `npm run asr:model`，`server/models` 会 COPY 进镜像；运行时需要 `libgomp1`（Dockerfile 已安装）
 - 镜像基于 `node:24-bookworm-slim`（`node:sqlite` 需要 Node ≥ 22.5），构建时 npm 走 npmmirror

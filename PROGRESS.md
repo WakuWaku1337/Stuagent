@@ -12,6 +12,7 @@
 - 工具合并：删除 `courseware_generate`（含 `courseware/service.ts`、`courseware/tool.ts`、`CoursewareView.vue`、`VizCanvas.vue`），`visualize_generate` 改为统一入口（可只给 question 走预置匹配，或给 type+spec 精确控制）
 - 数据变更：`messages` 新增 `visualization_id` 列；预置可视化改用固定 id；清理了本次验证产生的 18 条重复预置记录（用户手工/生成/旧版课件未动）
 - 新增依赖：web workspace `three@0.187`、`function-plot@1.26`、`3dmol@2.5.5`；渲染器打进 `VizRenderer` 独立 chunk（1.45 MB / gzip 391 KB），随路由懒加载
+- Docker 修复（2026-11-08）：容器 SQLite 原放在 Windows bind mount（9p），`node:sqlite` 报 `disk I/O error` 无限重启；改为命名卷 `docker_app_data:/app/data`（`EDU_DATA_DIR=/app/data`），uploads 仍 bind mount。旧库先 `PRAGMA wal_checkpoint(TRUNCATE)` 再灌入卷；宿主端口支持 `APP_PORT` 覆盖（与 dev 的 3000 共存时用 3100）。实测 restarts=0、读写正常、重启后数据保留
 
 历史：阶段 J · S31 3D 课件与机制收尾已完成（2026-11-07）
 - 课件生成支持 2D/3D：立体几何、空间结构、分子等主题要求 canvas 3D 投影；失败回退内置 3D 模板（拖拽旋转、缩放、自动旋转、顶点/棱/面）
@@ -295,7 +296,7 @@
 
 启动方式：
 - 开发：npm run milvus:up；npm run dev（server 3000 + web 5173）
-- Docker（本地试用，2026-11-07 实测）：docker compose -f docker/docker-compose.yml up -d --build；访问 http://localhost:3000；数据挂载 server/data 与 server/uploads；容器内 Milvus 地址 milvus:19530；实测 health、模型、SPA、资料、RAG、对话（含引用）全部正常
+- Docker（本地试用，2026-11-08 更新）：`docker compose -f docker/docker-compose.yml up -d --build`；访问 http://localhost:3000，与 dev 冲突时 `APP_PORT=3100 ... up -d edu-agent`；SQLite/记忆/课件在命名卷 `app_data`（`/app/data`），uploads 仍挂载 `server/uploads`；容器内 Milvus 地址 milvus:19530；实测 health、SPA、会话读写、旧课件 HTML、重启数据保留正常
 - 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts；图片问答：scripts/check-vision.ts；语音：scripts/check-voice.ts；存储治理：scripts/check-storage.ts（建议先启动服务，BASE_URL 可覆盖）
 - 存储治理配置：STORAGE_QUOTA_MB（默认 1024，0 关闭）、STORAGE_RETENTION_DAYS（默认 30）、STORAGE_CLEANUP_HOURS（默认 24，0 关闭）
 - 语音模型：npm run asr:model（下载到 server/models，约 82MB；不入库；Docker 构建前需先下载）
