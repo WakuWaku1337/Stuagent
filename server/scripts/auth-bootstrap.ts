@@ -31,7 +31,7 @@ if ((!usernameArg || !passwordArg) && !process.stdin.isTTY) {
 
 const rl = !usernameArg || !passwordArg ? createInterface({ input, output }) : null;
 const username = usernameArg ?? (await rl!.question('管理员用户名：')).trim();
-const password = passwordArg ?? (await rl!.question('管理员密码（至少 10 位）：')).trim();
+const password = passwordArg ?? (await rl!.question('管理员密码（至少 6 位）：')).trim();
 rl?.close();
 
 try {

@@ -4,6 +4,8 @@
 
 公开注册：S33 数据隔离完成后已恢复默认开放（`REGISTRATION_OPEN=1`）；如需收紧设置 `REGISTRATION_OPEN=0`
 
+密码策略：注册、改密、管理员重置统一放宽为 6–128 位；README 已按 v0.30 重写（2026-11-08）
+
 阶段 I · S23 性能优化第一批已完成（2026-11-08）
 - 缓存：新增 SQLite `embedding_cache`、聊天答案缓存 `answer_cache`、检索语义缓存 `rag/cache.ts`；文档索引/删除时失效检索与答案缓存
 - 检索：短查询跳过 Cross-Encoder；RRFRanker 结果直接使用；RAG 结果按账号语义缓存，命中直接返回

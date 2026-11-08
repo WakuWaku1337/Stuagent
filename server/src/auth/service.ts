@@ -160,8 +160,8 @@ export function validateRegistrationInput(input: {
   if (!USERNAME_RE.test(username)) {
     throw new AuthError(422, 'USERNAME_INVALID', '用户名需为 3–32 位字母、数字、下划线或中划线');
   }
-  if (password.length < 10 || password.length > 128) {
-    throw new AuthError(422, 'PASSWORD_INVALID', '密码长度需为 10–128 位');
+  if (password.length < 6 || password.length > 128) {
+    throw new AuthError(422, 'PASSWORD_INVALID', '密码长度需为 6–128 位');
   }
   if (password.toLowerCase() === username.toLowerCase()) {
     throw new AuthError(422, 'PASSWORD_INVALID', '密码不能与用户名相同');
@@ -501,8 +501,8 @@ export async function changePassword(userId: string, currentSessionId: string, c
   if (!row || !(await verifyPassword(currentPassword, row.password_hash))) {
     throw new AuthError(422, 'CURRENT_PASSWORD_INVALID', '当前密码不正确');
   }
-  if (nextPassword.length < 10 || nextPassword.length > 128) {
-    throw new AuthError(422, 'PASSWORD_INVALID', '密码长度需为 10–128 位');
+  if (nextPassword.length < 6 || nextPassword.length > 128) {
+    throw new AuthError(422, 'PASSWORD_INVALID', '密码长度需为 6–128 位');
   }
   setUserPassword(userId, await hashPassword(nextPassword), { mustChange: false });
   revokeAllSessions(userId, currentSessionId);
@@ -549,8 +549,8 @@ export async function resetUserPassword(userId: string, password?: string): Prom
   const user = findUserById(userId);
   if (!user) throw new AuthError(404, 'USER_NOT_FOUND', '账号不存在');
   const temp = password || randomBytes(9).toString('base64url');
-  if (temp.length < 10 || temp.length > 128) {
-    throw new AuthError(422, 'PASSWORD_INVALID', '密码长度需为 10–128 位');
+  if (temp.length < 6 || temp.length > 128) {
+    throw new AuthError(422, 'PASSWORD_INVALID', '密码长度需为 6–128 位');
   }
   setUserPassword(userId, await hashPassword(temp), { mustChange: true });
   revokeAllSessions(userId);

@@ -23,8 +23,8 @@ async function submit(): Promise<void> {
     message.value = '用户名需为 3–32 位字母、数字、下划线或中划线';
     return;
   }
-  if (form.password.length < 10) {
-    message.value = '密码至少 10 位';
+  if (form.password.length < 6) {
+    message.value = '密码至少 6 位';
     return;
   }
   if (form.password !== form.confirm) {
@@ -88,7 +88,7 @@ async function submit(): Promise<void> {
         type="password"
         show-password
         autocomplete="new-password"
-        placeholder="至少 10 位"
+        placeholder="至少 6 位"
         :disabled="submitting"
       />
 

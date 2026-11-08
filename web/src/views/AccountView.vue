@@ -22,8 +22,8 @@ function fmt(value: number): string {
 
 async function submitPassword(): Promise<void> {
   message.value = '';
-  if (!form.currentPassword || form.newPassword.length < 10) {
-    message.value = '请输入当前密码，新密码至少 10 位';
+  if (!form.currentPassword || form.newPassword.length < 6) {
+    message.value = '请输入当前密码，新密码至少 6 位';
     return;
   }
   if (form.newPassword !== form.confirm) {
@@ -112,7 +112,7 @@ onMounted(() => {
           <label class="field-label" for="current-password">当前密码</label>
           <el-input id="current-password" v-model="form.currentPassword" type="password" show-password autocomplete="current-password" />
           <label class="field-label" for="new-password">新密码</label>
-          <el-input id="new-password" v-model="form.newPassword" type="password" show-password autocomplete="new-password" placeholder="至少 10 位" />
+          <el-input id="new-password" v-model="form.newPassword" type="password" show-password autocomplete="new-password" placeholder="至少 6 位" />
           <label class="field-label" for="confirm-password">确认新密码</label>
           <el-input id="confirm-password" v-model="form.confirm" type="password" show-password autocomplete="new-password" />
           <p v-if="message" class="account-error">{{ message }}</p>

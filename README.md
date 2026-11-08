@@ -1,208 +1,208 @@
 # 智学 Agent（EduPi）
 
-本地优先、单用户的高中学习智能体。以 Pi Coding Agent 为内核，Vue3 前端 + Node（Hono）本地服务。
+面向高中生的本地优先 AI 学习智能体。以 Pi Coding Agent 为内核，Node（Hono）提供 API 与 SSE，Vue3 提供学习台；默认单实例部署，支持多账号注册与按账号隔离学习数据。
 
-当前进度见 [PROGRESS.md](./PROGRESS.md)，设计文档见 [智学Agent项目设计文档.md](./智学Agent项目设计文档.md)。
+- 设计文档：[智学Agent项目设计文档.md](./智学Agent项目设计文档.md)
+- 实施进度：[PROGRESS.md](./PROGRESS.md)
+- Agent 配置：[AGENTS.md](./AGENTS.md) 与 `docs/agents/`
 
-## 目录
+## 能做什么
 
-```
-├── docker/          # Milvus Standalone（etcd + Milvus，local 存储免 MinIO）
-├── server/          # Node + Hono 后端（内嵌 Pi，阶段 B 接入）
-└── web/             # Vue3 + Vite 前端
-```
+- **资料问答（RAG）**：上传 PDF / Word / TXT / Markdown，混合检索 + RRF + Cross-Encoder 精排，回答带教材引用。
+- **对话与引导解题**：Tutor / Quizzer / Analyst / Solver 四个角色，SSE 流式输出，支持拍照/图片问答、语音输入与朗读、回复截断续写。
+- **记忆与诊断**：长期记忆、学习者画像、BKT 掌握度、薄弱点推荐。
+- **出题与练习**：按知识点出题、按掌握度校准难度、每日练习、模拟考试、错题本与 SM-2 复习。
+- **考试复盘**：整卷识别、逐题判分、错因归类、趋势对比与复盘报告。
+- **统一可视化**：函数/圆锥曲线、立体几何、分子、物理场景、细胞结构等按题目内容确定性建模；预置模板 + 交互渲染。
+- **MCP 扩展**：接入 stdio / HTTP / SSE MCP 服务，工具发现后按服务授权给子智能体。
+- **账号与隔离**：注册登录、会话管理、管理员账号页；每个账号独立拥有资料、对话、错题、媒体、任务与 RAG collection。
+
+## 技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| 内核 | Pi Coding Agent |
+| 后端 | Node.js 24 + TypeScript + Hono + SSE + WebSocket |
+| 前端 | Vue3 + Vite + TypeScript + Element Plus + ECharts + KaTeX |
+| 数据 | SQLite（`node:sqlite`）+ 本地文件 |
+| 检索 | Milvus Standalone（Dense + 原生 BM25）→ RRF → Cross-Encoder |
+| 文档解析 | pdfjs-dist、mammoth、word-extractor；扫描件走 Docling |
+| 语音 | sherpa-onnx Paraformer（ASR）+ 浏览器/服务端 TTS |
+| 可视化 | Three.js、function-plot、3Dmol、内联 SVG |
+
+## 环境要求
+
+- Node.js 24（`node:sqlite` 需要 Node ≥ 22.5）
+- Docker Desktop（Milvus；扫描件 OCR 另需 docling-serve）
+- 可选：Ollama（本地模型）、NVIDIA GPU（加速 Docling）
+- 麦克风功能需在 `localhost` 或 HTTPS 下使用
 
 ## 快速开始
 
 ```bash
 npm install
-npm run milvus:up      # 启动 Milvus（19530），健康检查：npm run milvus:health
-npm run docling:up     # 扫描件 OCR：启动 docling-serve（5001，CPU 版镜像较大）
-npm run docling:models # 可选：下载公式增强模型（CPU 推理约 80s/页，默认不启用）
-npm run asr:model      # 首次启用语音输入：下载本地 ASR 模型（约 82MB，写入 server/models，不入库）
-npm run auth:bootstrap # 首次启动：创建管理员（用户名/密码/手机号邮箱可选）
-npm run dev            # 并行启动 server(3000) 与 web(5173)
+
+# 依赖服务
+docker compose -f docker/docker-compose.yml up -d etcd milvus  # 仅启动 Milvus（19530）
+npm run docling:up         # 可选：扫描件 OCR 服务（5001，CPU 镜像较大）
+npm run docling:models     # 可选：下载 Docling 公式增强模型，默认不启用
+npm run asr:model          # 可选：下载本地 ASR 模型（约 82MB，不入库）
+
+# 首次初始化管理员
+npm run auth:bootstrap
+
+# 启动开发环境
+npm run dev                # server 3000 + web 5173
 ```
 
-浏览器访问 http://localhost:5173 ，先登录，再进入学习台。未初始化时登录页会提示先运行 `npm run auth:bootstrap`。公开注册默认开放；管理员也可用 `npm run user:create` 建号，或在侧栏「账号管理」页建号、停用、重置密码并查看上线检查。需要关闭注册时设置 `REGISTRATION_OPEN=0`。各账号的资料、对话、媒体、后台任务与 RAG 已按账号隔离。
+浏览器打开 http://localhost:5173 登录。公开注册默认开放；关闭注册时可用 `npm run user:create` 建号。
 
-> 认证默认开启（`AUTH_ENABLED=1`）。跑隔离回归时可对测试服务设置 `AUTH_ENABLED=0`；对开启认证的服务运行 `regression.ts` 时设置 `AUTH_USER` / `AUTH_PASSWORD`。
+> 首次管理员必须在本机创建；未初始化时注册接口返回 409，登录页会提示先运行 `npm run auth:bootstrap`。
+
+## 账号与数据隔离
+
+- 首个管理员 `user_id` 固定为 `default`，已有 `default` 数据自动归属该管理员。
+- 公开注册默认开启；设置 `REGISTRATION_OPEN=0` 可关闭，关闭后只能由管理员建号。
+- 密码长度 6–128 位；管理员重置密码后用户下次登录必须改密。
+- 每个账号独立拥有：资料与切片、题库、对话、记忆、错题、掌握度、考试、计划、每日练习、媒体、可视化、后台任务与用量。
+- 模型密钥、MCP、存储治理属于实例级资源，仅管理员可读写；普通用户不可见密钥。
+- 管理员可在侧栏「账号管理」页建号、启停、改角色/联系方式、重置密码、查看审计与上线检查。
+- 停用账号会立即撤销其全部会话；最后一名管理员不能停用或降级。
+- RAG 按账号使用独立 Milvus collection；首个账号沿用旧 `edu_chunks` 以兼容已有向量。
 
 ## 常用命令
 
 | 命令 | 说明 |
-|---|---|
-| `npm run dev` | 并行启动前后端 |
-| `npm run dev:server` | 仅后端（node --watch + jiti 直跑 TS） |
-| `npm run dev:web` | 仅前端（Vite） |
-| `npm run build` | 构建前端 |
+| --- | --- |
+| `npm run dev` | 并行启动后端 3000 与前端 5173 |
+| `npm run dev:server` / `npm run dev:web` | 只启动后端 / 只启动前端 |
+| `npm run build` | 构建前端 `web/dist` |
 | `npm run auth:bootstrap` | 创建首个管理员（仅首次） |
-| `npm run user:create` | 管理员建号（默认关闭注册时使用） |
-| `npm run auth:reset` | 管理员/CLI 重置指定账号密码 |
-| `npm run auth:check` | 认证自检（需运行中的服务与测试账号） |
+| `npm run user:create` | 管理员/CLI 建号 |
+| `npm run auth:reset` | 重置指定账号密码 |
+| `npm run auth:check` | 注册、登录、会话、重置密码、限流自检 |
 | `npm run auth:isolation` | A/B 账号数据隔离自检 |
-| `npm run auth:admin-check` | 管理员建号/停用/重置/最后管理员保护自检 |
-| `npm run backup` | SQLite 备份到 data/backups；加 `-- --with-uploads` 同时备份 uploads |
-| `npm run bench:s23` | RAG 冷/热延迟与缓存命中；加 `-- --chat` 测 TTFT/P95 |
-| `npm run auth:migrate` | 账号迁移检查；加 `-- --reindex` 强制重建向量 |
-| `npm run milvus:up / milvus:down` | 启停 Milvus |
-| `npm run milvus:health` | Milvus 健康检查（9091/healthz） |
-| `npm run docling:up / docling:down` | 启停扫描件 OCR 服务 docling-serve（5001） |
-| `npm run docling:models` | 下载 Docling 公式增强模型到命名卷（可选） |
-| `node --import jiti/register scripts/check-rag.ts all` | RAG 自检：建集合 → 灌库 → 检索（在 server 目录运行） |
+| `npm run auth:admin-check` | 管理端建号/停用/重置/最后管理员保护自检 |
+| `npm run auth:migrate` | 账号迁移检查；`-- --reindex` 强制重建向量 |
+| `npm run backup` | SQLite 备份到 `data/backups`；`-- --with-uploads` 同时备份 uploads |
+| `npm run bench:s23` | RAG 冷/热延迟与缓存命中；`-- --chat` 测 TTFT/P95 |
+| `npm run milvus:up` / `down` / `health` | compose 整体启停与健康检查（会连带应用容器） |
+| `npm run docling:up` / `down` / `models` | Docling 启停与模型下载 |
+| `npm run asr:model` | 下载本地 ASR 模型 |
 
-## 性能相关配置
+## 配置
+
+配置放在 `server/.env`。SQLite、记忆镜像与课件镜像默认写入 `server/data`，上传文件写入 `server/uploads`。
+
+### 模型与检索
+
+| 变量 | 说明 |
+| --- | --- |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 对话模型（OpenAI 兼容或 Anthropic） |
+| `EMBEDDING_MODEL` | Embedding 模型，默认 `text-embedding-v4` |
+| `RERANK_MODEL` | Cross-Encoder 模型，默认 `gte-rerank-v2` |
+| `LLM_OCR_MODEL` | 图片 OCR 兜底模型（默认复用当前 Provider 的视觉模型） |
+| `LLM_VISION=0/1` | 覆盖视觉能力判断 |
+| `MILVUS_ADDRESS` | 默认 `localhost:19530` |
+| `DOCLING_URL` | 默认 `http://localhost:5001` |
+
+### 账号
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `ANSWER_CACHE_TTL_MIN` | 60 | 精确答案缓存有效期，0 关闭 |
-| `RAG_CACHE_TTL_MIN` / `RAG_CACHE_THRESHOLD` | 10 / 0.96 | 检索语义缓存有效期与余弦阈值 |
+| `AUTH_ENABLED` | 1 | 关闭仅限隔离测试，生产禁止 |
+| `REGISTRATION_OPEN` | 1 | 公开注册开关 |
+| `AUTH_BOOTSTRAP` | 0 | 允许本机首次注册成为管理员 |
+| `SESSION_TTL_DAYS` / `SESSION_ABSOLUTE_DAYS` | 7 / 30 | 会话空闲/绝对有效期 |
+| `COOKIE_SECURE` | auto | HTTPS 下设置 Secure Cookie |
+| `TRUST_PROXY` | 1 | 信任反向代理转发头 |
+| `LOGIN_MAX_FAILURES` / `LOGIN_LOCK_MIN` | 5 / 15 | 登录失败锁定 |
+| `ANSWER_CACHE_TTL_MIN` | 60 | 精确答案缓存，0 关闭 |
+| `RAG_CACHE_TTL_MIN` / `RAG_CACHE_THRESHOLD` | 10 / 0.96 | 检索语义缓存 |
 | `EMBEDDING_CACHE_DAYS` | 30 | embedding 缓存保留天数 |
 | `CHAT_HISTORY_LIMIT` | 16 | 回放历史条数 |
-| `RERANK_MIN_QUERY_CHARS` | 16 | 短于此长度的查询跳过 Cross-Encoder |
-| `ROUTE_LLM_MIN_CHARS` | 24 | 短于此长度的问题跳过路由模型 |
+| `RERANK_MIN_QUERY_CHARS` | 16 | 短查询跳过 Cross-Encoder |
+| `ROUTE_LLM_MIN_CHARS` | 24 | 短问题跳过路由模型 |
 
-## 接口速览
+### 存储与扫描件
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | /health | 健康检查 |
-| POST | /api/auth/register | 注册（用户名、密码、手机号/邮箱可选） |
-| POST | /api/auth/login | 登录，建立 HttpOnly 会话 |
-| POST | /api/auth/logout | 退出当前会话 |
-| GET | /api/auth/me | 当前账号；`AUTH_ENABLED=0` 时返回 `user:null` |
-| GET | /api/model | 当前模型与配置状态 |
-| POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/media/route/delta/citations/continuation/incomplete/done/error）；支持 `mediaIds` 图片输入；无 conversationId 时自动建会话 |
-| POST | /api/conversations/:id/messages | 在指定会话继续对话；`continue:true` 从断点续写、`regenerate:true` 重新生成上一条回复 |
-| POST | /api/media/upload | 上传图片（multipart `file`，最多 4 张、单张 ≤8MB，仅 JPG/PNG/WebP） |
-| GET | /api/media/:id | 读取图片（immutable 缓存、nosniff） |
-| GET | /api/media/storage | 存储用量、配额状态、孤儿文件与清理记录 |
-| POST | /api/media/cleanup | 孤儿回收 / 按保留期清理（`dryRun` 预检） |
-| GET | /api/asr | 语音识别状态（模型是否就绪） |
-| POST | /api/asr | 语音转文字（multipart `audio`，16-bit PCM WAV，8k~48kHz，≤60s） |
-| GET | /api/tts | TTS 模式（浏览器 / 服务端） |
-| POST | /api/tts | 朗读文本（未配置服务端 TTS 时返回 `{mode:'browser'}`，否则返回音频） |
-| GET/POST | /api/conversations | 历史会话列表（`q` 搜索、`limit/offset` 分页）/ 新建会话 |
-| GET/PUT/DELETE | /api/conversations/:id | 会话详情与消息（`limit/before` 分页）/ 重命名与置顶 / 删除 |
-| GET | /api/plan | 当前学习计划、完成统计与归档历史 |
-| POST | /api/plan/generate | 按目标/天数/每日时长生成计划（自动归档旧计划） |
-| PUT | /api/plan/:id | 调整计划参数并重算每日任务 |
-| PUT | /api/plan/:id/tasks/:taskId | 勾选/取消计划任务，自动计算进度 |
-| POST/DELETE | /api/plan/:id/archive · /api/plan/:id | 归档计划 / 删除计划 |
-| GET | /api/daily | 今日练习状态、题目、连续天数与推荐重点 |
-| POST | /api/daily/start · /api/daily/answer | 开始/继续今日练习 / 提交单题（完成时联动掌握度与错题本） |
-| GET | /api/conversations/:id/messages | 消息分页（`limit`、`before` 游标） |
-| POST/GET | /api/documents | 上传（multipart，支持多文件与 `paths` 相对路径）/ 文档列表 |
-| POST | /api/documents/batch | 文件夹批量导入（`paths` 保留相对路径，逐文件返回状态） |
-| GET/DELETE | /api/documents/:id | 文档详情与切片 / 删除（含向量） |
-| POST | /api/documents/:id/reparse / index | 重新解析 / 重新灌库 |
-| GET | /api/documents/:id/ocr | 扫描件 OCR 进度、逐页识别文本与置信度、待校对页 |
-| GET | /api/documents/:id/ocr/pages/:page/image | 该页原文图（200 DPI，用于人工校对） |
-| PUT | /api/documents/:id/ocr/pages/:page | 保存校对文本 / 标记该页已校对 |
-| POST | /api/documents/:id/ocr/confirm · retry | 校对通过后重新切片灌库 / 重跑 OCR |
-| POST | /api/knowledge/search | 混合检索 + 精排 + 引用 |
-| GET/POST | /api/memory | 长期记忆列表 / 写入 |
-| GET | /api/wrongbook | 错题列表（`?due=1` 只看待复习） |
-| POST | /api/wrongbook/:id/review | SM-2 复习（quality 0-5） |
-| GET | /api/mastery | BKT 掌握度 |
-| POST | /api/quiz/generate · /api/quiz/answer | 出题 / 答题判分（难度省略时按掌握度推荐） |
-| GET | /api/quiz/difficulty | 按知识点掌握度推荐出题难度 |
-| GET/POST | /api/mcp/servers | MCP 服务列表 / 添加（stdio、HTTP、SSE；env/headers 加密） |
-| PUT/DELETE | /api/mcp/servers/:id | 编辑/启停 / 删除 MCP 服务 |
-| POST | /api/mcp/servers/:id/test | 连接测试并发现工具 |
-| GET | /api/mcp/tools | 已发现且已授权的 MCP 工具 |
-| PUT | /api/mcp/servers/:id/tools/:toolName | 单工具授权开关 |
-| POST | /api/bank/extract | 从资料提取题库 |
-| POST | /api/exam/start · /api/exam/:id/submit | 模考开始 / 交卷分析 |
-| GET | /api/agents | 子智能体列表（Tutor/Quizzer/Analyst/Solver） |
-| POST | /api/tasks · GET /api/tasks/:id | 后台任务（quiz/analysis），202 入队；WS `/ws` 推送进度 |
-| POST | /api/reviews/recognize | 整卷识别（拍照 PNG/JPG、PDF、DOCX、文本） |
-| GET | /api/reviews · /api/reviews/:id · /api/reviews/compare | 考试记录 / 详情 / 趋势对比 |
-| POST | /api/reviews/:id/analyze | 生成复盘报告（判分、错因、BKT、错题联动） |
-| GET/POST | /api/visualize | 统一可视化列表（含旧版课件）/ 按 spec 生成 |
-| POST | /api/visualize/generate | 按题目内容本地解析建模（函数/方程/几何/分子/物理场景），不调用对话模型 |
-| GET/DELETE | /api/visualize/:id | 统一可视化对象 / 删除（课件与生成结果同一入口） |
-| GET | /api/courseware/:id | 旧版单文件课件 HTML（CSP 沙箱，只读兼容） |
-| GET | /api/settings/providers | Provider 与模型目录 |
-| GET/PUT | /api/settings/model | 当前模型 / 切换 Provider 与模型 |
-| GET/PUT | /api/settings/apikey · /api/settings/keys | 密钥列表（掩码）/ 保存、更新、删除 |
-| PUT | /api/settings/reasoning · /api/settings/generation | 思考强度 / 生成参数与预算 |
-| POST | /api/settings/test | 测试模型连接与密钥有效性 |
-| GET | /api/usage/summary · /api/usage/daily · /api/usage/cost | 用量汇总 / 每日明细 / 成本 |
-| GET | /api/usage/export?format=csv|json | 导出用量明细 |
+| 变量 | 说明 |
+| --- | --- |
+| `EDU_DATA_DIR` / `EDU_UPLOADS_DIR` | 数据目录与上传目录 |
+| `STORAGE_QUOTA_MB` / `STORAGE_RETENTION_DAYS` / `STORAGE_CLEANUP_HOURS` | 存储配额与孤儿清理 |
+| `DOCLING_OCR_ENGINE` | `auto` / `docling` / `docling+vision` |
+| `DOCLING_TIMEOUT_MS` / `DOCLING_POLL_MS` | Docling 超时与轮询 |
+| `DOCLING_FORMULA_ENRICHMENT=1` | 启用 Docling 公式 LaTeX（CPU 很慢，默认关闭） |
+| `OCR_CONFIDENCE_THRESHOLD` | 待校对阈值，默认 0.8 |
+| `OCR_VISION_FORMULA_MIN_MARKERS` | 公式占位达到该数量的页面走视觉增强，默认 10，0 关闭 |
+| `OCR_DPI` | 扫描页渲染 DPI，默认 200 |
 
-页面：`/` 首页、`/plan` 学习计划（目标拆解、每日任务勾选、调整与归档）、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、语音输入与朗读、参考资料折叠、KaTeX、角色徽标、截断续写）、`/documents` 资料库、`/quiz` 出题与每日练习、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化（交互课件与自动可视化合并，`/courseware` 自动跳转）、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展。
+## 数据与检索
 
-技术栈前端：Vue3 + Vite + Element Plus + ECharts（按需加载），统一水墨蓝主题与移动端抽屉导航。
+- 文档切片保留章节路径与页码，引用可回查原文；扫描件由 Docling 输出逐页 Markdown，低置信/公式密集页可用视觉模型增强。
+- 扫描件异步执行，资料库显示进度；低置信页面提供原文图与 Markdown 对照校对，校对后重新切片入库。
+- 每个账号的向量写入独立 Milvus collection；资料、媒体、任务事件与用量都按账号隔离。
+- 长期记忆同时镜像到 `data/memory/<learner_id>/`；旧版单文件 HTML 课件保留只读兼容。
 
-安全：对话接口内置注入拦截、手机号/身份证/银行卡/邮箱脱敏、密钥过滤，流式输出同样生效。
+## 主要 API
 
-资料库：支持多文件与文件夹批量导入（`webkitdirectory` 或拖拽文件夹），相对路径写入 `source_path` 并作为切片章节前缀；单次最多 50 个文件 / 200MB，前端文件夹上限 100 个 / 300MB。
+| 分组 | 路径 |
+| --- | --- |
+| 认证 | `POST /api/auth/register`、`login`、`logout`；`GET /api/auth/me`；`PUT /api/auth/password`；`GET /api/auth/sessions` |
+| 管理 | `/api/admin/users`、`/api/admin/users/:id`、`/reset-password`、`/api/admin/audit`、`/api/admin/system-check` |
+| 对话 | `POST /api/chat`；`POST /api/conversations/:id/messages`；`GET/POST /api/conversations` |
+| 资料 | `POST/GET /api/documents`、`/api/documents/:id`、`/ocr`、`/reparse`、`/index`；`POST /api/knowledge/search` |
+| 学习 | `/api/quiz/*`、`/api/wrongbook/*`、`/api/mastery`、`/api/memory/*`、`/api/plan/*`、`/api/daily/*` |
+| 考试 | `POST /api/reviews/recognize`、`/api/reviews/:id/analyze`；`GET /api/reviews`、`/compare` |
+| 媒体/语音 | `/api/media/upload`、`/api/media/:id`、`/api/media/storage`、`/api/asr`、`/api/tts` |
+| 可视化 | `GET/POST /api/visualize`、`POST /api/visualize/generate`、`/api/courseware/:id` |
+| MCP | `/api/mcp/servers`、`/api/mcp/tools`、`/api/mcp/servers/:id/test` |
+| 设置/用量 | `/api/settings/*`、`/api/usage/summary`、`/daily`、`/cost`、`/export` |
+| 任务 | `POST/GET /api/tasks`、`/api/tasks/:id`；WebSocket `/ws` |
 
-扫描件：自动判定图片型 PDF（逐页正文长度 + 整页大图覆盖）后交给 docling-serve 整篇转换（先 `npm run docling:up`）。Docling 输出逐页 Markdown、表格与逐页 confidence；低于阈值或公式密集的页面再用视觉模型做单页增强（`OCR_ENGINE=auto|docling|docling+vision`，旧逐页 OCR 链路已移除）。多页异步执行，`GET /api/documents/:id/ocr` 显示进度；渲染的原图用于校对，转换成功后的结果缓存在 `uploads/ocr/<id>/docling.json`，重试复用；转换中途重启会重新提交整篇转换。低于 0.8 标记待校对；资料库校对弹层左侧原文图、右侧 Markdown，全部校对后写回并重新切片入库。配置：`DOCLING_URL`（默认 `http://localhost:5001`）、`DOCLING_OCR_ENGINE`（默认 `auto`）、`DOCLING_TIMEOUT_MS`（默认 30 分钟）、`DOCLING_POLL_MS`、`OCR_CONFIDENCE_THRESHOLD`（默认 0.8）、`OCR_VISION_FORMULA_MIN_MARKERS`（Docling 页未解码公式数阈值，默认 10，设 0 关闭公式增强）、`DOCLING_FORMULA_ENRICHMENT`（设 1 启用 Docling 公式 LaTeX；需先 `npm run docling:models`，CPU 很慢）、`OCR_DPI`（默认 200）。
+## 页面
 
-出题与复习：难度默认“推荐”，按知识点 BKT 掌握度选择基础/中等/拔高；错题到期时顶栏显示“待复习 N”，每天首次打开会弹出复习提醒。
+`/` 学习台、`/plan` 学习计划、`/chat` 对话、`/documents` 资料库、`/quiz` 智能出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模拟考试、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展、`/admin` 账号管理、`/account` 账号设置。
 
-MCP：支持 stdio 本地进程与 HTTP/SSE 远程服务，连接测试后自动发现工具；工具以 `mcp__服务__工具` 注册给 Tutor/Quizzer/Analyst/Solver，可逐项授权。env 与 headers 加密保存，接口只返回键名。
-
-统一可视化：交互课件与自动可视化已合并为一个入口。生成可视化时由后端直接解析题目内容，不调用对话模型：函数表达式与交点/不等式/区间/滑块、圆锥曲线方程、正方体/棱锥的命名点/棱长/中点/截面、三角形/矩形/圆等平面图形、常见分子式、打印机进纸/斜面/电路/透镜/细胞等场景分别走确定性建模；解析不到具体结构时不出图，纯主题问题才回退预置模板。渲染器共用：立体几何/三维函数/地形/细胞结构用 Three.js，函数与圆锥曲线用 function-plot（多函数叠加、交点与零点标记、不等式区域填充、参数滑块、图例显隐），化学分子用 3Dmol，受力/电路/示意用内联 SVG。工具条提供旋转缩放、重置视角、辅助线/截面显隐、标注、自动旋转、全屏与截图；辅助元素附带添加理由。回答内嵌可视化，并把 `visualization_id` 落库，重开会话仍然可见。旧的单文件 HTML 课件保留为只读项（沙箱 iframe + CSP），不再生成新的 HTML 课件。长期记忆镜像到 `server/data/memory/*.md`。
-
-解题视频：按设计 §3.2 不在本期自研渲染管线；如需视频，可通过 `/mcp` 接入外部解题视频 MCP 服务。
-
-回复完整性：读取 `finish_reason=length` 并检查代码围栏/括号闭合，自动携带断点续写最多 3 次；仍未完成时 SSE 发出 `incomplete` 事件，前端显示“继续生成 / 重新生成”。
-
-图片：前端压缩到最长边 1600px（JPEG 0.85）后上传，文件存于 `server/uploads/media`；视觉模型直接读图；非视觉模型自动用同 Provider 的视觉模型做 OCR（可用 `LLM_OCR_MODEL` 指定 OCR 模型），`LLM_VISION=0/1` 可覆盖视觉能力判断。图片消息与 OCR 文本随会话持久化，重开可续聊。
-
-语音：浏览器录音（波形/时长/取消），重采样为 16k 单声道 WAV 后 `POST /api/asr`；识别使用本地 sherpa-onnx Paraformer 中文模型（先运行 `npm run asr:model`），音频不出本机。TTS 默认使用浏览器 `speechSynthesis`（系统音色、语速可调，可正文朗读单条回复）；如配置 `TTS_BASE_URL` / `TTS_MODEL` / `TTS_VOICE`，`POST /api/tts` 会改用 OpenAI 兼容 `/audio/speech` 返回音频。麦克风需在 localhost 或 HTTPS 下使用。
-
-## 质量校验
+## 验证
 
 ```bash
 cd server
-node --import jiti/register scripts/regression.ts   # 全流程回归（45 项）
-node --import jiti/register scripts/eval-rag.ts     # RAG 评测（Hit@K / MRR / 延迟）
-node --import jiti/register scripts/check-security.ts  # 安全策略单测
-node --import jiti/register scripts/check-vision.ts # 图片问答端到端（上传→读图/OCR→作答）
-node --import jiti/register scripts/check-voice.ts  # 语音端到端（ASR→文本、TTS 模式）
-node --import jiti/register scripts/check-storage.ts # 存储治理（级联、保留期清理、配额）
-node --import jiti/register scripts/check-plan.ts   # 学习计划（生成、勾选、调整、归档、校验）
-node --import jiti/register scripts/check-continuation.ts # 截断判定、续写拼接与提示词
-node --import jiti/register scripts/check-daily.ts  # 每日练习（生成、作答、完成、连续天数）
-node --import jiti/register scripts/check-documents.ts # 文件夹导入相对路径与章节元数据
-node --import jiti/register scripts/check-ocr.ts    # 扫描件 OCR（判定→Docling→进度→原文图→校对写回→重新入库）
-node --import jiti/register scripts/check-docling.ts [pdf] # Docling 逐页 Markdown / confidence / 耗时
-node --import jiti/register scripts/check-difficulty.ts # 掌握度 → 出题难度校准
-node --import jiti/register scripts/check-mcp.ts    # MCP 服务接入、工具发现/授权/调用与配置同步
-node --import jiti/register scripts/check-visualize.ts # 可视化 spec 校验与表达式求值
-node --import jiti/register scripts/check-s31.ts    # 统一可视化引擎（题目确定性建模、spec 校验、统一列表/删除）、SKILL.md 与记忆镜像
+node --import jiti/register scripts/regression.ts          # 全流程回归
+node --import jiti/register scripts/check-auth.ts          # 认证
+node --import jiti/register scripts/check-isolation.ts     # 多账号隔离
+node --import jiti/register scripts/check-admin.ts         # 管理端
+node --import jiti/register scripts/eval-rag.ts            # RAG 检索指标与延迟
+node --import jiti/register scripts/check-docling.ts       # Docling 解析
+node --import jiti/register scripts/check-ocr.ts           # 扫描件 OCR 与校对
+node --import jiti/register scripts/check-visualize.ts     # 可视化建模
 ```
 
-## 生产构建
+对开启认证的服务运行回归时设置 `AUTH_USER` / `AUTH_PASSWORD`；隔离测试服务可用 `AUTH_ENABLED=0`。
+
+## 生产与 Docker
 
 ```bash
-npm run build        # 构建 web/dist
-npm run dev:server   # :3000 同时托管 API 与前端 SPA
+npm run build
+npm run dev:server        # 3000 同时托管 API 与 SPA
 ```
 
-## Docker 部署（推荐本地试用）
+Docker：
 
 ```bash
-# 首次或代码更新后：构建镜像并启动（etcd + Milvus + 应用）
 docker compose -f docker/docker-compose.yml up -d --build
-
-# 查看状态 / 日志
-docker compose -f docker/docker-compose.yml ps
-docker compose -f docker/docker-compose.yml logs -f edu-agent
-
-# 停止
-docker compose -f docker/docker-compose.yml stop edu-agent
+# 与 dev 的 3000 冲突时
+APP_PORT=3100 docker compose -f docker/docker-compose.yml up -d edu-agent
 ```
 
-- 访问 http://localhost:3000 （API 与前端同端口，WebSocket 走同一端口 `/ws`）；与 `npm run dev` 的 3000 冲突时用 `APP_PORT=3100 docker compose ... up -d edu-agent`，改访问 3100
-- 应用配置读取 `server/.env`（compose `env_file`）；容器内 Milvus 地址为 `milvus:19530`，Docling 地址为 `docling-serve:5001`
-- 扫描件 OCR 需额外启动 `npm run docling:up`（compose profile `docling`，宿主 5001）；镜像默认 CPU 版，国内直连 GHCR/Quay 过慢时可在 `docker/.env` 里用 `DOCLING_IMAGE` 指向镜像源（本机已配置南京大学镜像）
-- 数据持久化：SQLite 与记忆/课件镜像放命名卷 `app_data`（容器内 `/app/data`，由 `EDU_DATA_DIR` 指定），`server/uploads` 以 bind mount 挂载原始文件。**不要把 SQLite 放回 Windows bind mount**：9p 无可靠文件锁，`node:sqlite` 会以 `disk I/O error` 崩溃循环
-- 旧数据迁移：先让宿主机停写并 checkpoint WAL，再灌入卷，例如
-  `docker run --rm -v docker_app_data:/data -v "D:\stu\server\data:/src:ro" docker.m.daocloud.io/library/node:24-bookworm-slim sh -c "cp -a /src/edu.db /src/memory /src/courseware /src/pi-agent /data/"`
-- 语音识别模型不打入 git：构建镜像前先在宿主机运行 `npm run asr:model`，`server/models` 会 COPY 进镜像；运行时需要 `libgomp1`（Dockerfile 已安装）
-- 镜像基于 `node:24-bookworm-slim`（`node:sqlite` 需要 Node ≥ 22.5），构建时 npm 走 npmmirror
+- 应用、Milvus、Docling 可分开运行；Docling 通过 compose profile `docling` 启停。
+- SQLite 与记忆/课件镜像放命名卷 `app_data`，上传文件挂载 `server/uploads`；不要把 SQLite 放回 Windows bind mount。
+- 公网部署需配置 HTTPS 反向代理、Secure Cookie 与每日备份；管理员可在「账号管理 → 上线检查」查看认证、注册、HTTPS 与最近备份状态。
+- 备份：`npm run backup`，恢复后建议撤销全部会话。
+
+## 已知限制与后续
+
+- S23 仍未完成独立“快模型”分级路由与并发压测；当前已落地 embedding/检索/答案缓存、短问题快路径与 TTFT/P95 小样本压测。
+- 部分非核心体验仍在后续：MCP 断线重连/日志/推荐模板、复盘报告导出、TTS 音量/逐句跟读、可视化动画与联动高亮。
+- 解题视频按设计不自研渲染管线，后续接外部 MCP。
+- 扫描件 OCR 依赖 docling-serve；公式增强默认关闭，Docling 转换中途重启会重新提交。
