@@ -2,6 +2,8 @@
 
 当前阶段：S23 性能优化第一批已完成（2026-11-08）；剩余全量压测与独立快模型路由
 
+公开注册：S33 数据隔离完成后已恢复默认开放（`REGISTRATION_OPEN=1`）；如需收紧设置 `REGISTRATION_OPEN=0`
+
 阶段 I · S23 性能优化第一批已完成（2026-11-08）
 - 缓存：新增 SQLite `embedding_cache`、聊天答案缓存 `answer_cache`、检索语义缓存 `rag/cache.ts`；文档索引/删除时失效检索与答案缓存
 - 检索：短查询跳过 Cross-Encoder；RRFRanker 结果直接使用；RAG 结果按账号语义缓存，命中直接返回
@@ -27,7 +29,7 @@
 - 隔离范围：对话、记忆、错题、掌握度、测验、考试复盘、计划、每日练习、题库、资料/切片/OCR、媒体、可视化、课件、后台任务、用量全部按账号查询；管理员也不能读取他人内容
 - RAG：Milvus 每账号独立 collection；首个账号沿用旧 `edu_chunks`，新账号 `edu_chunks_<id>`；`npm run auth:migrate` 只做检查，`-- --reindex` 才重建向量
 - 权限：模型设置、MCP、存储治理后端 `requireAdmin`；侧栏隐藏、路由 `adminOnly` 拦截；普通用户只看到自己的用量
-- 账号入口：公开注册默认关闭（`REGISTRATION_OPEN=0`）；管理员用 `npm run user:create` 建号，`auth:reset` 重置密码
+- 账号入口：S33 期间临时关闭公开注册；数据隔离完成后已恢复默认开放（`REGISTRATION_OPEN=1`），管理员仍可用 `npm run user:create` 建号、`auth:reset` 重置密码
 - 验收：`check-auth.ts` ALL PASS（注册关闭时跳过注册项）；`check-isolation.ts` ALL PASS（设置权限、记忆、会话、资料、媒体、默认数据归属、RAG 全部通过）；浏览器实测普通用户侧栏无设置/MCP/存储，直接访问 /settings 被重定向；`vue-tsc -b` 与 `npm run build` 通过
 - 注意：管理员账号页面仍属 S34；旧 default 数据自动归属首个管理员；迁移前建议备份 `edu.db` 与 `uploads/`
 

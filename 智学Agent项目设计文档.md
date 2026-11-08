@@ -801,7 +801,7 @@ flowchart TD
 
 * 登录态使用服务端会话 + `HttpOnly` Cookie，不在前端保存 token；会话可随时撤销。
 * 公网流量必须经过反向代理终止 HTTPS，应用端口不直接暴露；限流与上传大小在代理层和应用层各做一层。
-* 注册默认关闭，只能由管理员建号；设置 `REGISTRATION_OPEN=1` 才开放公开注册。本期不发送邮箱验证码，手机号/邮箱只作联系信息。
+* 注册默认开放；数据隔离完成后，任何访客都可注册，设置 `REGISTRATION_OPEN=0` 可关闭。本期不发送邮箱验证码，手机号/邮箱只作联系信息。
 * 管理员重置密码是唯一找回方式；重置密码、改角色等高风险操作必须审计。
 * 个人数据统一以 `learner_id = user_id` 归属；不引入第二套 owner 字段。
 * 模型密钥、Provider 配置、MCP、存储配额属于实例级资源，仅管理员可读写；普通用户只能使用，不能查看密钥。
@@ -1806,7 +1806,7 @@ flowchart TD
 
 * 账号表 `users`，角色只有 `admin` 与 `user`。第一个创建的账号自动成为管理员。
 * 一个账号对应一名学习者：`users.user_id` 与 `learners.learner_id` 一对一，个人数据继续使用现有 `learner_id` 字段归属，不新增第二套归属字段。
-* 注册默认关闭，只能由管理员建号；设置 `REGISTRATION_OPEN=1` 才开放公开注册。
+* 注册默认开放；设置 `REGISTRATION_OPEN=0` 可关闭，关闭后只能由管理员建号。
 * 管理员建号使用 `npm run user:create`，首次登录必须修改临时密码；忘记密码用 `npm run auth:reset`。
 * 首次管理员必须通过 `npm run auth:bootstrap` 在本机创建，或显式设置 `AUTH_BOOTSTRAP=1` 且仅允许本机访问注册页。禁止在公网默认开放“第一个注册的人成为管理员”。
 * 手机号、邮箱仅作联系信息，不验证、不唯一、不作为登录凭据；登录只用用户名 + 密码。
@@ -1899,7 +1899,7 @@ flowchart TD
 | --- | --- | --- |
 | AUTH_ENABLED | 1 | 关闭仅用于隔离测试，生产禁止 |
 | AUTH_BOOTSTRAP | 0 | 允许本机首次注册成为管理员 |
-| REGISTRATION_OPEN | 0 | 默认关闭；设为 1 才开放公开注册，关闭后仅管理员建号 |
+| REGISTRATION_OPEN | 1 | 默认开放公开注册；设为 0 关闭，关闭后仅管理员建号 |
 | SESSION_TTL_DAYS | 7 | 空闲有效期 |
 | SESSION_ABSOLUTE_DAYS | 30 | 绝对有效期 |
 | SESSION_MAX_PER_USER | 10 | 单账号最大会话数 |
@@ -1926,7 +1926,7 @@ flowchart TD
 本期账号以“简单可用”为目标，不引入邮件验证、CAPTCHA、2FA 和按账号配额。做到以下几条即可上线；后续需要再逐项加。
 
 * 绑定域名并使用 HTTPS（Caddy 自动证书或 Nginx + Let's Encrypt），只开放 80/443，应用端口不直接暴露。
-* 反向代理与应用双层限流；注册默认关闭，需要时通过 `REGISTRATION_OPEN=1` 开放。
+* 反向代理与应用双层限流；注册默认开放，可通过 `REGISTRATION_OPEN=0` 关闭。
 * 每日备份 SQLite、uploads 与 `.env`：运行 `npm run backup`（可加 `-- --with-uploads`），备份写入 `data/backups/`；每月至少做一次恢复检查，恢复后撤销全部会话。
 * 配置外部 uptime 与磁盘/内存告警；日志不记录密码、Cookie、token。
 * 提供 `/privacy`、`/terms` 与联系方式；大陆节点需完成 ICP 备案。
@@ -2266,7 +2266,7 @@ flowchart TD
 
 6. 越权防护：所有个人数据查询带 `learner_id`；管理员不能读取他人学习内容；越权访问统一返回 404；文件下载先查归属再读盘。
 
-7. 公网部署：必须 HTTPS 与 Secure Cookie；注册默认关闭，只在确认数据隔离后按需设置 `REGISTRATION_OPEN=1`；首次管理员只允许本机 CLI 创建，禁止公网抢占。
+7. 公网部署：必须 HTTPS 与 Secure Cookie；数据隔离完成后默认开放注册，可按需设置 `REGISTRATION_OPEN=0` 关闭；首次管理员只允许本机 CLI 创建，禁止公网抢占。
 
 8. 审计与日志：记录登录、注册、改密、重置、会话撤销与管理员操作；日志不含密码、会话 token 与模型密钥。
 

@@ -24,7 +24,7 @@ npm run auth:bootstrap # 首次启动：创建管理员（用户名/密码/手�
 npm run dev            # 并行启动 server(3000) 与 web(5173)
 ```
 
-浏览器访问 http://localhost:5173 ，先登录，再进入学习台。未初始化时登录页会提示先运行 `npm run auth:bootstrap`。公开注册默认关闭；管理员用 `npm run user:create` 建号，或在侧栏「账号管理」页建号、停用、重置密码并查看上线检查。确需开放注册时设置 `REGISTRATION_OPEN=1`。各账号的资料、对话、媒体、后台任务与 RAG 已按账号隔离。
+浏览器访问 http://localhost:5173 ，先登录，再进入学习台。未初始化时登录页会提示先运行 `npm run auth:bootstrap`。公开注册默认开放；管理员也可用 `npm run user:create` 建号，或在侧栏「账号管理」页建号、停用、重置密码并查看上线检查。需要关闭注册时设置 `REGISTRATION_OPEN=0`。各账号的资料、对话、媒体、后台任务与 RAG 已按账号隔离。
 
 > 认证默认开启（`AUTH_ENABLED=1`）。跑隔离回归时可对测试服务设置 `AUTH_ENABLED=0`；对开启认证的服务运行 `regression.ts` 时设置 `AUTH_USER` / `AUTH_PASSWORD`。
 

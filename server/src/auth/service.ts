@@ -98,7 +98,7 @@ export function authEnabled(): boolean {
 }
 
 export function registrationOpen(): boolean {
-  return process.env.REGISTRATION_OPEN === '1';
+  return process.env.REGISTRATION_OPEN !== '0';
 }
 
 export function bootstrapAllowed(): boolean {
