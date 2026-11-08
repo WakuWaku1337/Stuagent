@@ -2,6 +2,17 @@
 
 当前阶段：阶段 J · S17 补齐（§6.14 统一可视化引擎）已完成（2026-11-08）；下一项为阶段 I · S23 性能优化与压测（待做，见文末）
 
+设计文档补做：扫描件 OCR（§6.8.8 / 第 14 章 S05）已完成（2026-11-08）
+- 判定：逐页提取文本 + OperatorList 大图覆盖率，正文 <30 字且整页图 ≥40% 记为需 OCR；需 OCR 页 ≥50% 判为图片型 PDF。实测 24.7MB / 108 页全位图资料：0 字、108/108 页需 OCR、判定 scanned=true；`testdata/chemistry.pdf` 等文本 PDF 仍走同步文本路径（200 parsed，2 切片）
+- 渲染：`pdfjs-dist` + `@napi-rs/canvas`，默认 200 DPI（`OCR_DPI` 150–320）；页面 JPEG 落 `uploads/ocr/<id>/`，实测 1275×1651 的扫描页渲染为 3542×4587（约 0.56–0.97MB/页），原图接口可缓存读取
+- 引擎：`OCR_ENGINE=auto|vision|local`。视觉模型整页输出 Markdown + LaTeX（本资料推荐）；本地 RapidOCR 经 `scripts/rapidocr_bridge.py` 接入，未安装时回退视觉模型；本地置信度低或公式密度高时升级视觉模型（`local+vision`）
+- 质量分：模型自评 + 乱码/重复/“无法识别”惩罚 + 图像清晰度上限（拉普拉斯高频/灰度对比度）；实测清晰页 0.98–1.0，模糊页 0.10–0.15；默认阈值 0.8，低置信页状态 `review`，文档状态 `needs_review`
+- 异步与缓存：`ocr_jobs` / `ocr_pages` 落库；逐页缓存、重启恢复 queued/running 任务；`OCR_CONCURRENCY` 默认 2、`OCR_TIMEOUT_MS` 默认 180s；进度接口返回 done/total、百分比、当前页与待校对页。实测第 2 页完成后杀掉服务再启动：running→queued 自动恢复，只补第 1 页，第 2 页 `updated_at` 未变（未重复识别）
+- 校对写回：`GET /:id/ocr`、`GET /:id/ocr/pages/:page/image`、`PUT /:id/ocr/pages/:page`、`POST /:id/ocr/confirm`、`POST /:id/ocr/retry`；全部低置信页标记已校对后重新切片并灌库
+- 前端：上传返回 202 `ocr_queued` 并提示“扫描件将进行 OCR，需几分钟”；列表显示待 OCR / OCR 中 / 待校对、页数进度条与校对入口；校对弹层左侧原文图、右侧 Markdown 编辑，保存草稿/标记已校对/写回重新入库；截图 `server/testdata/screens/documents-ocr-list.png`、`documents-ocr-review.png`
+- 验收：`BASE_URL=http://localhost:3117 node --import jiti/register scripts/check-ocr.ts` ALL PASS（202 入队、2/2 页完成、原文图 561176 B、模糊页 0.10 待校对、写回 confirmed、5 切片、indexed 且切片含校对标记）；浏览器实测校对弹层图片 3542×4587、页 2 待校对、保存后重新入库；`vue-tsc -b && vite build` 通过
+- 关键文件：`server/src/documents/pdf-ocr.ts`（判定/渲染/引擎/质量分/任务/写回）、`server/src/routes/documents.ts`（OCR 路由）、`server/src/store.ts`（ocr_jobs/ocr_pages）、`web/src/views/DocumentsView.vue`（进度与校对）、`server/scripts/{check-ocr.ts,rapidocr_bridge.py,make-scanned-pdf.mjs}`；新增依赖 `@napi-rs/canvas`
+
 阶段 J · S17 补齐：§6.14 统一可视化引擎（交互课件 + 自动可视化合并）已完成（2026-11-08）
 - 前端只保留一个入口 `/visualize`（统一可视化）；`/courseware` 重定向并保留 `?open=` 参数兼容旧链接，侧栏「交互课件」「自动可视化」两条合并为一条
 - 统一渲染器：Three.js（geometry3d/function3d/terrain/biology）、function-plot（function2d/conic，含隐式曲线）、3Dmol（molecule）、内联 SVG（physics/diagram）；旧版单文件 HTML 课件只读，走沙箱 iframe
@@ -338,7 +349,9 @@
 
 遗留问题与风险：
 - GitHub 直连依赖 SteamTools TLS 代理 + 仓库级 CA；gh 尚未登录，triage 标签未创建；本地历史与远程初始提交不相关，尚未推送
-- 扫描版 PDF 未逐页 OCR；复盘识别无人工校对界面
+- 复盘识别暂无人工校对界面（扫描件 OCR 已有逐页校对；复盘题图识别仍未接入）
+- 扫描件 OCR 默认走视觉模型：单页实测约 10–30s，长文档需数十分钟；本地 RapidOCR 桥接脚本已提供，但当前环境未安装 rapidocr/onnxruntime，离线部署需自行安装
+- OCR 页面原图按 200 DPI 保存（模糊扫描页实测约 0.56–0.97MB/页），大批量扫描件会明显增加 uploads 占用；删除资料会同步清理 OCR 原图
 - 参考资料会累积低相关项；后台任务单 Worker 串行且失败无重试
 - 会话搜索为 `LIKE`（标题/消息内容），消息量很大时无 FTS 索引；上下文回放只取最近 24 条，超长会话的早期细节可能丢失
 - 同一会话内不同角色仍各用独立 Pi 会话，但会通过 SQLite 历史重建共享上下文；跨会话仅共享画像/记忆/掌握度

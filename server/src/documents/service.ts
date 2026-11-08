@@ -15,6 +15,7 @@ import { uploadsDir } from '../storage/paths.ts';
 import { checkStorageQuota } from '../storage/quota.ts';
 import { chunkBlocks } from './chunker.ts';
 import { detectEncoding, parseDoc, parseDocx, parseMarkdown, parsePdf, parseText, type ParsedBlock } from './parsers.ts';
+import { analyzePdf, removeOcrFiles, startOcrJob } from './pdf-ocr.ts';
 
 export const uploadDir = uploadsDir;
 mkdir(uploadDir, { recursive: true }).catch(() => {});
@@ -50,6 +51,9 @@ export interface UploadResult {
   code?: string;
   message?: string;
   source_path?: string | null;
+  ocr_required?: boolean;
+  ocr_pages?: number;
+  ocr_done?: number;
 }
 
 export class DocumentError extends Error {
@@ -139,6 +143,24 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
 
   try {
     await writeFile(join(uploadDir, `${documentId}${ext}`), buffer);
+    if (ext === '.pdf') {
+      const analysis = await analyzePdf(buffer);
+      if (analysis.scanned) {
+        const job = startOcrJob(documentId, { analysis });
+        return {
+          document_id: documentId,
+          filename,
+          file_type: ext.slice(1),
+          chunk_count: 0,
+          status: 'ocr_queued',
+          source_path: sourcePath,
+          ocr_required: true,
+          ocr_pages: job.total_pages,
+          ocr_done: job.done_pages,
+          message: `检测到图片型 PDF（${analysis.pageCount} 页），已开始 OCR`,
+        };
+      }
+    }
     const blocks = await parser.parse(buffer);
     if (blocks.length === 0) throw new Error('未提取到文本内容');
     const drafts = chunkBlocks(blocks);
@@ -179,6 +201,24 @@ export async function reparseDocument(id: string): Promise<UploadResult> {
 
   const { readFile } = await import('node:fs/promises');
   const buffer = await readFile(join(uploadDir, `${id}${ext}`));
+  if (ext === '.pdf') {
+    const analysis = await analyzePdf(buffer);
+    if (analysis.scanned) {
+      const job = startOcrJob(id, { analysis });
+      return {
+        document_id: id,
+        filename: doc.filename,
+        file_type: doc.file_type,
+        chunk_count: 0,
+        status: 'ocr_queued',
+        source_path: doc.source_path,
+        ocr_required: true,
+        ocr_pages: job.total_pages,
+        ocr_done: job.done_pages,
+        message: `检测到图片型 PDF（${analysis.pageCount} 页），已重新开始 OCR`,
+      };
+    }
+  }
   const blocks = await parser.parse(buffer);
   const drafts = chunkBlocks(blocks);
   const sourcePath = doc.source_path ?? doc.filename;
@@ -218,4 +258,5 @@ export async function removeDocumentFile(document: DocumentRow): Promise<void> {
   } catch {
     // 文件已缺失时忽略
   }
+  await removeOcrFiles(document.document_id);
 }

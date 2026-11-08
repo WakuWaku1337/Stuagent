@@ -24,6 +24,43 @@ export interface DocumentItem {
   created_at: number;
 }
 
+export type OcrPageStatus = 'pending' | 'text' | 'ocr' | 'review' | 'confirmed' | 'failed';
+
+export interface OcrPageItem {
+  page: number;
+  status: OcrPageStatus;
+  confidence: number;
+  engine: string | null;
+  markdown: string;
+  image_url: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface OcrJobItem {
+  document_id: string;
+  engine: string;
+  status: string;
+  total_pages: number;
+  done_pages: number;
+  low_confidence: number;
+  failed_pages: number;
+  current_page: number | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+  progress: number;
+  review_required: boolean;
+  review_pages: number[];
+}
+
+export interface OcrDetail {
+  job: OcrJobItem | null;
+  pages: OcrPageItem[];
+  threshold: number;
+  engine: string;
+}
+
 export interface MasteryItem {
   knowledge_point: string;
   probability: number;
@@ -256,6 +293,21 @@ export const api = {
   health: () => request<HealthResponse>('/health'),
   model: () => request<ModelInfo>('/api/model'),
   documents: () => request<{ documents: DocumentItem[] }>('/api/documents'),
+  ocrDetail: (id: string) => request<OcrDetail>(`/api/documents/${id}/ocr`),
+  saveOcrPage: (id: string, page: number, markdown: string, confirm: boolean) =>
+    request<{ page: number; status: OcrPageStatus; confidence: number }>(
+      `/api/documents/${id}/ocr/pages/${page}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markdown, confirm }),
+      },
+    ),
+  confirmOcr: (id: string) =>
+    request<{ document_id: string; chunk_count: number; status: string }>(
+      `/api/documents/${id}/ocr/confirm`,
+      { method: 'POST' },
+    ),
   mastery: () => request<{ mastery: MasteryItem[] }>('/api/mastery'),
   wrongbook: () => request<{ records: WrongRecord[]; due: number }>('/api/wrongbook'),
   exams: () => request<{ exams: ExamSummary[] }>('/api/reviews'),

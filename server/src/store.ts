@@ -335,6 +335,35 @@ db.exec(`
     source TEXT,
     created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ocr_jobs (
+    document_id TEXT PRIMARY KEY,
+    engine TEXT NOT NULL,
+    status TEXT NOT NULL,
+    total_pages INTEGER NOT NULL DEFAULT 0,
+    done_pages INTEGER NOT NULL DEFAULT 0,
+    low_confidence INTEGER NOT NULL DEFAULT 0,
+    failed_pages INTEGER NOT NULL DEFAULT 0,
+    current_page INTEGER,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ocr_pages (
+    document_id TEXT NOT NULL,
+    page INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    engine TEXT,
+    markdown TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0,
+    image_file TEXT,
+    width INTEGER,
+    height INTEGER,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (document_id, page)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ocr_pages_status ON ocr_pages(document_id, status);
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];
@@ -376,6 +405,33 @@ export interface ChunkRow {
   page: number | null;
   char_count: number;
   indexed: number;
+}
+
+export interface OcrJobRow {
+  document_id: string;
+  engine: string;
+  status: string;
+  total_pages: number;
+  done_pages: number;
+  low_confidence: number;
+  failed_pages: number;
+  current_page: number | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OcrPageRow {
+  document_id: string;
+  page: number;
+  status: string;
+  engine: string | null;
+  markdown: string;
+  confidence: number;
+  image_file: string | null;
+  width: number | null;
+  height: number | null;
+  updated_at: number;
 }
 
 export function insertDocument(row: Omit<DocumentRow, 'created_at'>): void {
@@ -446,6 +502,84 @@ export function updateDocument(
 export function deleteDocument(id: string): void {
   db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id);
   db.prepare('DELETE FROM documents WHERE document_id = ?').run(id);
+  db.prepare('DELETE FROM ocr_pages WHERE document_id = ?').run(id);
+  db.prepare('DELETE FROM ocr_jobs WHERE document_id = ?').run(id);
+}
+
+export function getOcrJob(documentId: string): OcrJobRow | undefined {
+  return db.prepare('SELECT * FROM ocr_jobs WHERE document_id = ?').get(documentId) as unknown as
+    | OcrJobRow
+    | undefined;
+}
+
+export function listOcrJobs(statuses: string[]): OcrJobRow[] {
+  const placeholders = statuses.map(() => '?').join(',');
+  return db
+    .prepare(`SELECT * FROM ocr_jobs WHERE status IN (${placeholders})`)
+    .all(...statuses) as unknown as OcrJobRow[];
+}
+
+export function saveOcrJob(row: Omit<OcrJobRow, 'created_at' | 'updated_at'> & { created_at?: number }): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO ocr_jobs (document_id, engine, status, total_pages, done_pages, low_confidence, failed_pages, current_page, error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(document_id) DO UPDATE SET
+       engine = excluded.engine, status = excluded.status, total_pages = excluded.total_pages,
+       done_pages = excluded.done_pages, low_confidence = excluded.low_confidence,
+       failed_pages = excluded.failed_pages, current_page = excluded.current_page,
+       error = excluded.error, updated_at = excluded.updated_at`,
+  ).run(
+    row.document_id,
+    row.engine,
+    row.status,
+    row.total_pages,
+    row.done_pages,
+    row.low_confidence,
+    row.failed_pages,
+    row.current_page,
+    row.error,
+    row.created_at ?? now,
+    now,
+  );
+}
+
+export function listOcrPages(documentId: string): OcrPageRow[] {
+  return db
+    .prepare('SELECT * FROM ocr_pages WHERE document_id = ? ORDER BY page')
+    .all(documentId) as unknown as OcrPageRow[];
+}
+
+export function getOcrPage(documentId: string, page: number): OcrPageRow | undefined {
+  return db
+    .prepare('SELECT * FROM ocr_pages WHERE document_id = ? AND page = ?')
+    .get(documentId, page) as unknown as OcrPageRow | undefined;
+}
+
+export function saveOcrPage(row: Omit<OcrPageRow, 'updated_at'>): void {
+  db.prepare(
+    `INSERT INTO ocr_pages (document_id, page, status, engine, markdown, confidence, image_file, width, height, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(document_id, page) DO UPDATE SET
+       status = excluded.status, engine = excluded.engine, markdown = excluded.markdown,
+       confidence = excluded.confidence, image_file = excluded.image_file,
+       width = excluded.width, height = excluded.height, updated_at = excluded.updated_at`,
+  ).run(
+    row.document_id,
+    row.page,
+    row.status,
+    row.engine,
+    row.markdown,
+    row.confidence,
+    row.image_file,
+    row.width,
+    row.height,
+    Date.now(),
+  );
+}
+
+export function clearOcrPages(documentId: string): void {
+  db.prepare('DELETE FROM ocr_pages WHERE document_id = ?').run(documentId);
 }
 
 export function markChunksIndexed(documentId: string): void {

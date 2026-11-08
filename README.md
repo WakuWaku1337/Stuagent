@@ -2,7 +2,7 @@
 
 本地优先、单用户的高中学习智能体。以 Pi Coding Agent 为内核，Vue3 前端 + Node（Hono）本地服务。
 
-当前进度见 [PROGRESS.md](./PROGRESS.md)，设计文档见 `C:\Users\13421\Doubao\chats\2026-11-04\new-chat\智学Agent项目设计文档.md`。
+当前进度见 [PROGRESS.md](./PROGRESS.md)，设计文档见 [智学Agent项目设计文档.md](./智学Agent项目设计文档.md)。
 
 ## 目录
 
@@ -65,6 +65,10 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/documents/batch | 文件夹批量导入（`paths` 保留相对路径，逐文件返回状态） |
 | GET/DELETE | /api/documents/:id | 文档详情与切片 / 删除（含向量） |
 | POST | /api/documents/:id/reparse / index | 重新解析 / 重新灌库 |
+| GET | /api/documents/:id/ocr | 扫描件 OCR 进度、逐页识别文本与置信度、待校对页 |
+| GET | /api/documents/:id/ocr/pages/:page/image | 该页原文图（200 DPI，用于人工校对） |
+| PUT | /api/documents/:id/ocr/pages/:page | 保存校对文本 / 标记该页已校对 |
+| POST | /api/documents/:id/ocr/confirm · retry | 校对通过后重新切片灌库 / 重跑 OCR |
 | POST | /api/knowledge/search | 混合检索 + 精排 + 引用 |
 | GET/POST | /api/memory | 长期记忆列表 / 写入 |
 | GET | /api/wrongbook | 错题列表（`?due=1` 只看待复习） |
@@ -104,6 +108,8 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 
 资料库：支持多文件与文件夹批量导入（`webkitdirectory` 或拖拽文件夹），相对路径写入 `source_path` 并作为切片章节前缀；单次最多 50 个文件 / 200MB，前端文件夹上限 100 个 / 300MB。
 
+扫描件：自动判定图片型 PDF（逐页正文长度 + 整页大图覆盖），按 200 DPI 渲染后逐页 OCR；视觉模型直接输出 Markdown + LaTeX（复杂版面/公式推荐），也可装本地 RapidOCR 走离线路径（`OCR_ENGINE=auto|vision|local`，`scripts/rapidocr_bridge.py`）。多页异步执行，`GET /api/documents/:id/ocr` 显示进度；逐页缓存、服务重启可续。按模型自评 + 乱码/重复 + 图像清晰度逐页打分，低于 0.8 标记待校对；资料库校对弹层左侧原文图、右侧 Markdown，全部校对后写回并重新切片入库。相关配置：`OCR_DPI`（默认 200）、`OCR_CONCURRENCY`（默认 2）、`OCR_CONFIDENCE_THRESHOLD`（默认 0.8）、`OCR_TIMEOUT_MS`、`OCR_LOCAL_PYTHON`。
+
 出题与复习：难度默认“推荐”，按知识点 BKT 掌握度选择基础/中等/拔高；错题到期时顶栏显示“待复习 N”，每天首次打开会弹出复习提醒。
 
 MCP：支持 stdio 本地进程与 HTTP/SSE 远程服务，连接测试后自动发现工具；工具以 `mcp__服务__工具` 注册给 Tutor/Quizzer/Analyst/Solver，可逐项授权。env 与 headers 加密保存，接口只返回键名。
@@ -132,6 +138,7 @@ node --import jiti/register scripts/check-plan.ts   # 学习计划（生成、�
 node --import jiti/register scripts/check-continuation.ts # 截断判定、续写拼接与提示词
 node --import jiti/register scripts/check-daily.ts  # 每日练习（生成、作答、完成、连续天数）
 node --import jiti/register scripts/check-documents.ts # 文件夹导入相对路径与章节元数据
+node --import jiti/register scripts/check-ocr.ts    # 扫描件 OCR（判定→进度→原文图→校对写回→重新入库）
 node --import jiti/register scripts/check-difficulty.ts # 掌握度 → 出题难度校准
 node --import jiti/register scripts/check-mcp.ts    # MCP 服务接入、工具发现/授权/调用与配置同步
 node --import jiti/register scripts/check-visualize.ts # 可视化 spec 校验与表达式求值
