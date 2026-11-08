@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Clock, Camera, Headset, Loading, Microphone, Picture, Promotion, Refresh, VideoPause } from '@element-plus/icons-vue';
+import { Clock, Camera, Headset, Loading, Microphone, Picture, Promotion, Refresh, VideoPause, EditPen } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useChatStore, type ChatMessage } from '../stores/chat';
 import MarkdownView from '../components/MarkdownView.vue';
 import ChatHistory from '../components/ChatHistory.vue';
+import InlineViz from '../components/InlineViz.vue';
 import type { ConversationItem } from '../api/conversations';
 import { api } from '../api/data';
 import { asrStatus } from '../api/voice';
@@ -33,9 +34,15 @@ const prompts = [
   '把「一元二次方程」讲得更直观',
 ];
 
-const lastAgent = computed(() => {
-  const assistant = [...chat.messages].reverse().find((m) => m.role === 'assistant' && m.agent);
+const lastAgent = computed(() => {  const assistant = [...chat.messages].reverse().find((m) => m.role === 'assistant' && m.agent);
   return assistant?.agent ?? '';
+});
+
+const lastAssistantIndex = computed(() => {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    if (chat.messages[index].role === 'assistant' && chat.messages[index].content) return index;
+  }
+  return -1;
 });
 
 const stateText = computed(() => {
@@ -500,6 +507,31 @@ onMounted(async () => {
               </button>
             </div>
             <MarkdownView v-if="m.role === 'assistant'" :text="m.content || ' '" />
+            <div
+              v-if="m.role === 'assistant' && i === lastAssistantIndex && m.content"
+              class="reply-actions"
+            >
+              <span v-if="m.incomplete" class="truncated-note">输出可能被截断</span>
+              <el-button
+                v-if="m.incomplete"
+                text
+                size="small"
+                :icon="Refresh"
+                :disabled="chat.streaming"
+                @click="chat.continueLast('continue')"
+              >
+                继续生成
+              </el-button>
+              <el-button
+                text
+                size="small"
+                :icon="EditPen"
+                :disabled="chat.streaming"
+                @click="chat.continueLast('regenerate')"
+              >
+                重新生成
+              </el-button>
+            </div>
             <template v-else>
               <div
                 v-if="m.attachments?.length"
@@ -549,6 +581,8 @@ onMounted(async () => {
                 <p class="cite-snippet">{{ c.snippet }}</p>
               </div>
             </div>
+
+            <InlineViz :visualization="m.visualization" :visualization-id="m.visualization_id" />
           </div>
         </div>
 
@@ -1080,6 +1114,29 @@ onMounted(async () => {
   font-size: 12px;
   line-height: 1.65;
   color: var(--muted);
+}
+
+.reply-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.reply-actions :deep(.el-button) {
+  height: auto;
+  padding: 2px 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.reply-actions :deep(.el-button:hover) {
+  color: var(--accent);
+}
+
+.truncated-note {
+  font-size: 11px;
+  color: var(--warning);
 }
 
 .typing {

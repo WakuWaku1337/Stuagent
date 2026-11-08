@@ -17,6 +17,7 @@ export interface DocumentItem {
   size: number;
   subject: string | null;
   tags?: string | null;
+  source_path?: string | null;
   status: string;
   chunk_count: number;
   error: string | null;

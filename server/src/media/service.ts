@@ -1,14 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { access, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { db } from '../store.ts';
 import { callLlm } from '../learning/llm.ts';
 import { findVisionModel, modelOrDefault, modelSupportsVision } from '../settings/providers.ts';
 import { getSettings } from '../settings/store.ts';
+import { mediaDir } from '../storage/paths.ts';
+import { checkStorageQuota } from '../storage/quota.ts';
+import { referencedMediaIds } from '../storage/refs.ts';
 
-const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-export const mediaDir = join(serverRoot, 'uploads', 'media');
+export { mediaDir };
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_OCR_BYTES = 5 * 1024 * 1024;
@@ -79,6 +80,34 @@ export function getMediaByHash(hash: string): MediaRow | undefined {
     | undefined;
 }
 
+export async function removeMedia(mediaId: string): Promise<number> {
+  const row = getMedia(mediaId);
+  if (!row) return 0;
+  db.prepare('DELETE FROM media WHERE media_id = ?').run(mediaId);
+  try {
+    await unlink(join(mediaDir, row.stored_name));
+  } catch {
+    // 文件已缺失时仍然回收数据库记录
+  }
+  return row.size;
+}
+
+export async function releaseUnreferencedMedia(
+  mediaIds: string[],
+): Promise<{ removed: number; bytes: number }> {
+  if (mediaIds.length === 0) return { removed: 0, bytes: 0 };
+  const referenced = referencedMediaIds();
+  let removed = 0;
+  let bytes = 0;
+  for (const id of new Set(mediaIds)) {
+    if (referenced.has(id)) continue;
+    if (!getMedia(id)) continue;
+    bytes += await removeMedia(id);
+    removed += 1;
+  }
+  return { removed, bytes };
+}
+
 export async function saveImage(file: File): Promise<MediaRow> {
   if (file.size === 0) throw new MediaError('IMAGE_EMPTY', '图片为空', 400);
   if (file.size > MAX_IMAGE_BYTES) {
@@ -103,6 +132,10 @@ export async function saveImage(file: File): Promise<MediaRow> {
   }
 
   await mkdir(mediaDir, { recursive: true });
+  const quota = checkStorageQuota(buffer.length);
+  if (!quota.allowed) {
+    throw new MediaError('STORAGE_QUOTA_EXCEEDED', quota.message, 507);
+  }
   const mediaId = randomUUID();
   const storedName = `${mediaId}.${sniffed.ext}`;
   await writeFile(join(mediaDir, storedName), buffer);

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
 import {
   findDocumentByHash,
   getDocument,
@@ -12,11 +11,12 @@ import {
   type ChunkRow,
   type DocumentRow,
 } from '../store.ts';
+import { uploadsDir } from '../storage/paths.ts';
+import { checkStorageQuota } from '../storage/quota.ts';
 import { chunkBlocks } from './chunker.ts';
 import { detectEncoding, parseDoc, parseDocx, parseMarkdown, parsePdf, parseText, type ParsedBlock } from './parsers.ts';
 
-const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-export const uploadDir = join(serverRoot, 'uploads');
+export const uploadDir = uploadsDir;
 mkdir(uploadDir, { recursive: true }).catch(() => {});
 
 const MAX_SIZE = 50 * 1024 * 1024;
@@ -38,6 +38,7 @@ const ALLOWED = new Map<string, { mime: RegExp; parse: (buf: Buffer) => ParsedBl
 export interface UploadMeta {
   subject?: string;
   tags?: string;
+  sourcePath?: string;
 }
 
 export interface UploadResult {
@@ -48,6 +49,7 @@ export interface UploadResult {
   status: string;
   code?: string;
   message?: string;
+  source_path?: string | null;
 }
 
 export class DocumentError extends Error {
@@ -65,10 +67,34 @@ export function allowedTypes(): string[] {
   return [...ALLOWED.keys()].map((e) => e.slice(1));
 }
 
+export function normalizeSourcePath(raw: string | undefined, fallback: string): string {
+  const stack: string[] = [];
+  for (const part of (raw ?? '').replace(/\\/g, '/').split('/')) {
+    const value = part.trim();
+    if (!value || value === '.') continue;
+    if (value === '..') stack.pop();
+    else stack.push(value);
+  }
+  return (stack.join('/') || fallback).slice(0, 300);
+}
+
+function folderOf(sourcePath: string): string {
+  const parts = sourcePath.split('/').filter(Boolean);
+  parts.pop();
+  return parts.join(' / ');
+}
+
+function chapterWithFolder(chapter: string | undefined, sourcePath: string): string | null {
+  const folder = folderOf(sourcePath);
+  if (!folder) return chapter || null;
+  return chapter ? `${folder} / ${chapter}` : folder;
+}
+
 export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadResult> {
   const filename = file.name || 'unnamed';
   const ext = extname(filename).toLowerCase();
   const parser = ALLOWED.get(ext);
+  const sourcePath = normalizeSourcePath(meta.sourcePath, filename);
 
   if (!parser) {
     throw new DocumentError(400, 'FILE_TYPE_UNSUPPORTED', '不支持的文件类型', {
@@ -93,6 +119,10 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
   }
 
   const documentId = randomUUID();
+  const quota = checkStorageQuota(buffer.length);
+  if (!quota.allowed) {
+    throw new DocumentError(507, 'STORAGE_QUOTA_EXCEEDED', quota.message);
+  }
   insertDocument({
     document_id: documentId,
     filename,
@@ -101,6 +131,7 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
     hash,
     subject: meta.subject ?? null,
     tags: meta.tags ?? null,
+    source_path: sourcePath,
     status: 'uploaded',
     chunk_count: 0,
     error: null,
@@ -118,7 +149,7 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
         document_id: documentId,
         seq: i + 1,
         text: d.text,
-        chapter: d.chapter || null,
+        chapter: chapterWithFolder(d.chapter, sourcePath),
         page: d.page ?? null,
         char_count: d.text.length,
       })),
@@ -130,6 +161,7 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
       file_type: ext.slice(1),
       chunk_count: drafts.length,
       status: 'parsed',
+      source_path: sourcePath,
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -149,6 +181,7 @@ export async function reparseDocument(id: string): Promise<UploadResult> {
   const buffer = await readFile(join(uploadDir, `${id}${ext}`));
   const blocks = await parser.parse(buffer);
   const drafts = chunkBlocks(blocks);
+  const sourcePath = doc.source_path ?? doc.filename;
   const { db } = await import('../store.ts');
   db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id);
   insertChunks(
@@ -157,17 +190,32 @@ export async function reparseDocument(id: string): Promise<UploadResult> {
       document_id: id,
       seq: i + 1,
       text: d.text,
-      chapter: d.chapter || null,
+      chapter: chapterWithFolder(d.chapter, sourcePath),
       page: d.page ?? null,
       char_count: d.text.length,
     })),
   );
   updateDocument(id, { status: 'parsed', chunk_count: drafts.length, error: null });
-  return { document_id: id, filename: doc.filename, file_type: doc.file_type, chunk_count: drafts.length, status: 'parsed' };
+  return {
+    document_id: id,
+    filename: doc.filename,
+    file_type: doc.file_type,
+    chunk_count: drafts.length,
+    status: 'parsed',
+    source_path: doc.source_path,
+  };
 }
 
 export function documentDetail(id: string): { document: DocumentRow; chunks: ChunkRow[] } | undefined {
   const document = getDocument(id);
   if (!document) return undefined;
   return { document, chunks: listChunks(id) };
+}
+
+export async function removeDocumentFile(document: DocumentRow): Promise<void> {
+  try {
+    await unlink(join(uploadDir, `${document.document_id}.${document.file_type}`));
+  } catch {
+    // 文件已缺失时忽略
+  }
 }

@@ -3,7 +3,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
-const dataDir = resolve(fileURLToPath(new URL('.', import.meta.url)), '../data');
+const dataDir = process.env.EDU_DATA_DIR?.trim()
+  ? resolve(process.env.EDU_DATA_DIR)
+  : resolve(fileURLToPath(new URL('.', import.meta.url)), '../data');
 mkdirSync(dataDir, { recursive: true });
 
 export const db = new DatabaseSync(resolve(dataDir, 'edu.db'));
@@ -18,6 +20,7 @@ db.exec(`
     hash TEXT NOT NULL UNIQUE,
     subject TEXT,
     tags TEXT,
+    source_path TEXT,
     status TEXT NOT NULL,
     chunk_count INTEGER NOT NULL DEFAULT 0,
     error TEXT,
@@ -266,11 +269,87 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_media_hash ON media(hash);
+
+  CREATE TABLE IF NOT EXISTS storage_cleanups (
+    cleanup_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL,
+    media_removed INTEGER NOT NULL DEFAULT 0,
+    files_removed INTEGER NOT NULL DEFAULT 0,
+    bytes_freed INTEGER NOT NULL DEFAULT 0,
+    detail TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_storage_cleanups_created ON storage_cleanups(created_at);
+
+  CREATE TABLE IF NOT EXISTS learning_plans (
+    plan_id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    subjects TEXT,
+    start_date TEXT NOT NULL,
+    days INTEGER NOT NULL,
+    daily_minutes INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    progress REAL NOT NULL DEFAULT 0,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_learning_plans_learner ON learning_plans(learner_id, status, updated_at);
+
+  CREATE TABLE IF NOT EXISTS daily_practices (
+    date TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    score REAL,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_daily_practices_learner ON daily_practices(learner_id, date);
+
+  CREATE TABLE IF NOT EXISTS mcp_servers (
+    server_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    transport TEXT NOT NULL,
+    command TEXT,
+    args TEXT,
+    url TEXT,
+    secrets TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    exposure TEXT NOT NULL DEFAULT 'direct',
+    status TEXT NOT NULL DEFAULT 'unknown',
+    last_error TEXT,
+    tools TEXT,
+    enabled_tools TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS visualizations (
+    visualization_id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    spec TEXT NOT NULL,
+    source TEXT,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 const sessionCols = db.prepare('PRAGMA table_info(quiz_sessions)').all() as unknown as { name: string }[];
 if (!sessionCols.some((c) => c.name === 'question_ids')) {
   db.exec('ALTER TABLE quiz_sessions ADD COLUMN question_ids TEXT');
+}
+
+const documentCols = db.prepare('PRAGMA table_info(documents)').all() as unknown as { name: string }[];
+if (!documentCols.some((c) => c.name === 'source_path')) {
+  db.exec('ALTER TABLE documents ADD COLUMN source_path TEXT');
+}
+
+const messageCols = db.prepare('PRAGMA table_info(messages)').all() as unknown as { name: string }[];
+if (!messageCols.some((c) => c.name === 'visualization_id')) {
+  db.exec('ALTER TABLE messages ADD COLUMN visualization_id TEXT');
 }
 
 export interface DocumentRow {
@@ -281,6 +360,7 @@ export interface DocumentRow {
   hash: string;
   subject: string | null;
   tags: string | null;
+  source_path: string | null;
   status: string;
   chunk_count: number;
   error: string | null;
@@ -300,8 +380,8 @@ export interface ChunkRow {
 
 export function insertDocument(row: Omit<DocumentRow, 'created_at'>): void {
   db.prepare(
-    `INSERT INTO documents (document_id, filename, file_type, size, hash, subject, tags, status, chunk_count, error, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO documents (document_id, filename, file_type, size, hash, subject, tags, source_path, status, chunk_count, error, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.document_id,
     row.filename,
@@ -310,6 +390,7 @@ export function insertDocument(row: Omit<DocumentRow, 'created_at'>): void {
     row.hash,
     row.subject,
     row.tags,
+    row.source_path,
     row.status,
     row.chunk_count,
     row.error,

@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 
 const HomeView = () => import('../views/HomeView.vue');
+const PlanView = () => import('../views/PlanView.vue');
 const ChatView = () => import('../views/ChatView.vue');
 const DocumentsView = () => import('../views/DocumentsView.vue');
 const QuizView = () => import('../views/QuizView.vue');
@@ -9,9 +10,11 @@ const MasteryView = () => import('../views/MasteryView.vue');
 const ExamView = () => import('../views/ExamView.vue');
 const TasksView = () => import('../views/TasksView.vue');
 const ReviewView = () => import('../views/ReviewView.vue');
-const CoursewareView = () => import('../views/CoursewareView.vue');
 const SettingsView = () => import('../views/SettingsView.vue');
 const UsageView = () => import('../views/UsageView.vue');
+const StorageView = () => import('../views/StorageView.vue');
+const McpView = () => import('../views/McpView.vue');
+const VisualizeView = () => import('../views/VisualizeView.vue');
 
 export default createRouter({
   history: createWebHistory(),
@@ -28,6 +31,12 @@ export default createRouter({
       name: 'chat',
       component: ChatView,
       meta: { title: '智学对话', subtitle: '主讲老师随问随答，回答附带教材引用' },
+    },
+    {
+      path: '/plan',
+      name: 'plan',
+      component: PlanView,
+      meta: { title: '学习计划', subtitle: '按目标与薄弱点拆解每日任务，逐项完成' },
     },
     {
       path: '/documents',
@@ -73,9 +82,7 @@ export default createRouter({
     },
     {
       path: '/courseware',
-      name: 'courseware',
-      component: CoursewareView,
-      meta: { title: '交互课件', subtitle: '生成可离线运行的交互式 HTML 课件' },
+      redirect: (to) => ({ path: '/visualize', query: to.query }),
     },
     {
       path: '/settings',
@@ -88,6 +95,24 @@ export default createRouter({
       name: 'usage',
       component: UsageView,
       meta: { title: '用量统计', subtitle: 'Token、成本、成功率与延迟趋势' },
+    },
+    {
+      path: '/storage',
+      name: 'storage',
+      component: StorageView,
+      meta: { title: '存储治理', subtitle: '图片与资料占用、配额告警与孤儿文件回收' },
+    },
+    {
+      path: '/mcp',
+      name: 'mcp',
+      component: McpView,
+      meta: { title: 'MCP 扩展', subtitle: '接入本地或远程 MCP，发现并授权工具' },
+    },
+    {
+      path: '/visualize',
+      name: 'visualize',
+      component: VisualizeView,
+      meta: { title: '统一可视化', subtitle: '交互课件与自动可视化合并：预置库优先，共用渲染器' },
     },
   ],
 });

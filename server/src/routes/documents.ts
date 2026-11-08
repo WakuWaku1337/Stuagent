@@ -1,9 +1,11 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { deleteDocument, listDocuments } from '../store.ts';
 import {
   DocumentError,
   documentDetail,
   ingestFile,
+  normalizeSourcePath,
+  removeDocumentFile,
   reparseDocument,
   type UploadResult,
 } from '../documents/service.ts';
@@ -11,6 +13,8 @@ import { deleteBySource } from '../rag/milvus.ts';
 import { indexDocument } from '../rag/service.ts';
 
 const documents = new Hono();
+const MAX_BATCH_FILES = 50;
+const MAX_BATCH_BYTES = 200 * 1024 * 1024;
 
 function triggerIndex(documentId: string) {
   indexDocument(documentId).catch((e) => {
@@ -18,7 +22,7 @@ function triggerIndex(documentId: string) {
   });
 }
 
-documents.post('/', async (c) => {
+async function handleUpload(c: Context) {
   let body: Record<string, unknown>;
   try {
     body = await c.req.parseBody({ all: true });
@@ -31,14 +35,39 @@ documents.post('/', async (c) => {
     (f): f is File => f instanceof File,
   );
   if (files.length === 0) return c.json({ code: 'FILE_EMPTY', message: '缺少 file 字段' }, 400);
+  if (files.length > MAX_BATCH_FILES) {
+    return c.json(
+      { code: 'BATCH_TOO_MANY_FILES', message: `单次最多上传 ${MAX_BATCH_FILES} 个文件，请分批导入` },
+      400,
+    );
+  }
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_BATCH_BYTES) {
+    return c.json(
+      { code: 'BATCH_TOO_LARGE', message: `单次上传总大小不能超过 ${MAX_BATCH_BYTES / 1024 / 1024}MB，请分批导入` },
+      413,
+    );
+  }
 
   const subject = typeof body.subject === 'string' ? body.subject : undefined;
   const tags = typeof body.tags === 'string' ? body.tags : undefined;
+  let paths: string[] = [];
+  if (typeof body.paths === 'string') {
+    try {
+      const parsed = JSON.parse(body.paths);
+      if (Array.isArray(parsed)) {
+        paths = parsed.map((item) => (typeof item === 'string' ? item : ''));
+      }
+    } catch {
+      paths = [];
+    }
+  }
 
   const results: UploadResult[] = [];
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
+    const sourcePath = normalizeSourcePath(paths[index], file.name);
     try {
-      results.push(await ingestFile(file, { subject, tags }));
+      results.push(await ingestFile(file, { subject, tags, sourcePath }));
     } catch (e) {
       if (e instanceof DocumentError) {
         results.push({
@@ -46,6 +75,7 @@ documents.post('/', async (c) => {
           status: 'failed',
           code: e.code,
           message: e.message,
+          source_path: sourcePath,
           ...(e.detail as object),
         });
       } else {
@@ -54,6 +84,7 @@ documents.post('/', async (c) => {
           status: 'failed',
           code: 'STORAGE_ERROR',
           message: e instanceof Error ? e.message : String(e),
+          source_path: sourcePath,
         });
       }
     }
@@ -69,7 +100,10 @@ documents.post('/', async (c) => {
     if (r.document_id && r.status === 'parsed') triggerIndex(r.document_id);
   }
   return c.json({ results }, 207);
-});
+}
+
+documents.post('/', handleUpload);
+documents.post('/batch', handleUpload);
 
 documents.get('/', (c) => {
   const docs = listDocuments().map(({ hash: _hash, ...rest }) => rest);
@@ -88,6 +122,7 @@ documents.delete('/:id', async (c) => {
   if (!detail) return c.json({ code: 'DOCUMENT_NOT_FOUND', message: '文档不存在' }, 404);
   await deleteBySource(id).catch(() => {});
   deleteDocument(id);
+  await removeDocumentFile(detail.document);
   return c.json({ deleted: id });
 });
 
@@ -124,6 +159,8 @@ function failureStatus(code?: string): number {
       return 409;
     case 'FILE_TOO_LARGE':
       return 413;
+    case 'STORAGE_QUOTA_EXCEEDED':
+      return 507;
     case 'INVALID_MIME':
       return 415;
     case 'PARSE_FAILED':

@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router';
 import {
+  Calendar,
   ChatDotRound,
   Clock,
   Collection,
+  Connection,
   DataAnalysis,
   DataBoard,
   DataLine,
   EditPen,
+  FolderOpened,
+  MagicStick,
   Notebook,
-  Reading,
   Setting,
   Timer,
   TrendCharts,
@@ -29,9 +32,10 @@ const groups: { label: string; items: NavItem[] }[] = [
     label: '学习',
     items: [
       { to: '/', label: '学习台', icon: DataBoard },
+      { to: '/plan', label: '学习计划', icon: Calendar },
       { to: '/chat', label: '智学对话', icon: ChatDotRound },
       { to: '/documents', label: '资料库', icon: Collection },
-      { to: '/courseware', label: '交互课件', icon: Reading },
+      { to: '/visualize', label: '统一可视化', icon: MagicStick },
     ],
   },
   {
@@ -54,6 +58,8 @@ const groups: { label: string; items: NavItem[] }[] = [
     label: '系统',
     items: [
       { to: '/usage', label: '用量统计', icon: DataLine },
+      { to: '/storage', label: '存储治理', icon: FolderOpened },
+      { to: '/mcp', label: 'MCP 扩展', icon: Connection },
       { to: '/settings', label: '模型设置', icon: Setting },
     ],
   },

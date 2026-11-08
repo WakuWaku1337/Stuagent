@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../store.ts';
-import { extractBankFromDocument, generateQuiz, listSessions, sessionInfo, startSession, submitSession } from '../learning/quiz.ts';
+import { extractBankFromDocument, generateQuiz, listSessions, recommendDifficulty, sessionInfo, startSession, submitSession } from '../learning/quiz.ts';
 import { listBanks, listQuestions, pickRandomQuestions, publicQuestion } from '../learning/questions.ts';
 import { deleteMemory, listMemories, recallMemories, writeMemory } from '../learning/memory.ts';
 import { deleteWrongRecord, dueCount, listWrongRecords, reviewWrongRecord } from '../learning/wrongbook.ts';
@@ -51,6 +51,17 @@ learning.get('/mastery', (c) => {
   });
 });
 
+learning.get('/quiz/difficulty', (c) => {
+  const knowledgePoint = (c.req.query('knowledge_point') ?? '').trim();
+  if (!knowledgePoint) return c.json({ error: 'knowledge_point 不能为空' }, 400);
+  const recommendation = recommendDifficulty(knowledgePoint);
+  return c.json({
+    knowledge_point: knowledgePoint,
+    ...recommendation,
+    options: ['基础', '中等', '拔高'],
+  });
+});
+
 learning.post('/quiz/generate', async (c) => {
   const body = await c.req
     .json<{ knowledge_point?: string; difficulty?: string; count?: number; subject?: string }>()
@@ -63,6 +74,9 @@ learning.post('/quiz/generate', async (c) => {
       count: body.count,
       subject: body.subject,
     });
+    const recommendation = recommendDifficulty(body.knowledge_point);
+    const applied =
+      body.difficulty && body.difficulty !== 'auto' ? body.difficulty : recommendation.difficulty;
     const sessionId = startSession({
       type: 'practice',
       title: `${body.knowledge_point} 练习`,
@@ -71,6 +85,9 @@ learning.post('/quiz/generate', async (c) => {
     });
     return c.json({
       session_id: sessionId,
+      difficulty: applied,
+      recommended_difficulty: recommendation.difficulty,
+      mastery: recommendation.probability,
       questions: questions.map((q) => {
         const { answer: _a, explanation: _e, ...rest } = publicQuestion(q);
         return rest;

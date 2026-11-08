@@ -23,6 +23,9 @@ export interface ChatMessage {
   agent?: string;
   attachments?: MessageAttachment[];
   created_at?: number;
+  incomplete?: boolean;
+  visualization?: import('../api/visualize').Visualization;
+  visualization_id?: string | null;
 }
 
 export interface PendingImage {
@@ -86,6 +89,7 @@ function fromStored(message: ConversationMessage): ChatMessage {
     agent: message.agent ?? undefined,
     citations: parseCitations(message.citations),
     attachments: parseAttachments(message.attachments),
+    visualization_id: message.visualization_id ?? null,
     created_at: message.created_at,
   };
 }
@@ -259,7 +263,12 @@ export const useChatStore = defineStore('chat', () => {
       if (conversationId.value !== id) return;
       const previousHasMore = hasMore.value;
       const previousCursor = nextCursor.value;
-      const fetched = detail.messages.map(fromStored);
+      const incompleteContents = new Set(
+        messages.value.filter((item) => item.incomplete && item.content).map((item) => item.content),
+      );
+      const fetched = detail.messages.map(fromStored).map((item) =>
+        item.role === 'assistant' && incompleteContents.has(item.content) ? { ...item, incomplete: true } : item,
+      );
       const fetchedIds = new Set(
         fetched.map((m) => m.message_id).filter((value): value is string => Boolean(value)),
       );
@@ -329,6 +338,8 @@ export const useChatStore = defineStore('chat', () => {
             reply.citations = [...(reply.citations ?? []), ...event.citations];
           }
           if (event.type === 'route' && event.agent_name) reply.agent = event.agent_name;
+          if (event.type === 'incomplete') reply.incomplete = true;
+          if (event.type === 'visualization' && event.visualization) reply.visualization = event.visualization;
           if (event.type === 'error') error.value = event.message ?? '对话出错';
         },
         controller.signal,
@@ -349,6 +360,48 @@ export const useChatStore = defineStore('chat', () => {
         await refreshSilently(activeConversation);
         await loadConversations(search.value);
       }
+    }
+  }
+
+  async function continueLast(action: 'continue' | 'regenerate') {
+    if (streaming.value || !conversationId.value) return;
+    error.value = '';
+    const id = conversationId.value;
+    const reply: ChatMessage = { role: 'assistant', content: '', created_at: Date.now() };
+    messages.value.push(reply);
+    streaming.value = true;
+    controller = new AbortController();
+    try {
+      await streamChatIn(
+        id,
+        '',
+        (event) => {
+          if (event.type === 'delta' && event.text) reply.content += event.text;
+          if (event.type === 'citations' && event.citations) {
+            reply.citations = [...(reply.citations ?? []), ...event.citations];
+          }
+          if (event.type === 'route' && event.agent_name) reply.agent = event.agent_name;
+          if (event.type === 'incomplete') reply.incomplete = true;
+          if (event.type === 'visualization' && event.visualization) reply.visualization = event.visualization;
+          if (event.type === 'error') error.value = event.message ?? '续写失败';
+        },
+        controller.signal,
+        undefined,
+        undefined,
+        action,
+      );
+      if (!reply.content && !error.value) error.value = action === 'continue' ? '未收到续写内容' : '未收到重新生成的内容';
+    } catch (e) {
+      if (!controller.signal.aborted) error.value = errText(e);
+    } finally {
+      streaming.value = false;
+      controller = null;
+      if (!reply.content) {
+        const index = messages.value.indexOf(reply);
+        if (index >= 0) messages.value.splice(index, 1);
+      }
+      await refreshSilently(id);
+      await loadConversations(search.value);
     }
   }
 
@@ -441,6 +494,7 @@ export const useChatStore = defineStore('chat', () => {
     clearPendingImages,
     open,
     send,
+    continueLast,
     stop,
     reset,
     loadOlder,

@@ -9,11 +9,13 @@ services:
     environment:
       PORT: 3000
       MILVUS_ADDRESS: milvus:19530
+      EDU_DATA_DIR: /app/data
     volumes:
-      - ../server/data:/app/server/data
+      # SQLite 不能放在 Windows bind mount（9p 无可靠文件锁，node:sqlite 报 disk I/O error），用命名卷
+      - app_data:/app/data
       - ../server/uploads:/app/server/uploads
     ports:
-      - "3000:3000"
+      - "${APP_PORT:-3000}:3000"
     depends_on:
       milvus:
         condition: service_healthy
@@ -64,5 +66,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  app_data:
   etcd_data:
   milvus_data:

@@ -206,6 +206,114 @@ await check('media reject non-image', async () => {
   return res.status === 422 && body.code === 'IMAGE_TYPE';
 });
 
+await check('storage stats', async () => {
+  const { status, body } = await getJson('/api/media/storage');
+  return (
+    status === 200 &&
+    typeof body.quota?.limit_mb === 'number' &&
+    typeof body.quota?.status === 'string' &&
+    typeof body.media?.count === 'number' &&
+    typeof body.disk?.files === 'number' &&
+    Array.isArray(body.cleanup?.history)
+  );
+});
+
+let cleanupMediaId = '';
+await check('storage orphan dry run', async () => {
+  const { body: uploaded } = await uploadFixture();
+  cleanupMediaId = uploaded.media_id ?? '';
+  const res = await fetch(BASE + '/api/media/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'orphans', dryRun: true }),
+  });
+  const body = await res.json();
+  const still = await fetch(BASE + `/api/media/${cleanupMediaId}`);
+  return (
+    res.status === 200 &&
+    Boolean(cleanupMediaId) &&
+    body.dry_run === true &&
+    body.candidates >= 1 &&
+    body.candidate_bytes > 0 &&
+    still.status === 200
+  );
+});
+
+await check('storage cleanup orphans', async () => {
+  const res = await fetch(BASE + '/api/media/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'orphans' }),
+  });
+  const body = await res.json();
+  const gone = await fetch(BASE + `/api/media/${cleanupMediaId}`);
+  const stats = (await getJson('/api/media/storage')).body;
+  return (
+    res.status === 200 &&
+    body.dry_run === false &&
+    body.removed_media >= 1 &&
+    body.freed_bytes > 0 &&
+    gone.status === 404 &&
+    stats.media.orphan_count === 0 &&
+    stats.cleanup.history.length >= 1
+  );
+});
+
+await check('storage cleanup validation', async () => {
+  const res = await fetch(BASE + '/api/media/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'retention', olderThanDays: 0 }),
+  });
+  const body = await res.json();
+  return res.status === 400 && body.code === 'INVALID_DAYS';
+});
+
+await check('plan endpoint', async () => {
+  const { status, body } = await getJson('/api/plan');
+  return (
+    status === 200 &&
+    (body.plan === null || typeof body.plan.plan_id === 'string') &&
+    Array.isArray(body.history) &&
+    (body.stats === null || typeof body.stats.total === 'number')
+  );
+});
+
+await check('daily endpoint', async () => {
+  const { status, body } = await getJson('/api/daily');
+  return (
+    status === 200 &&
+    (body.practice === null || typeof body.practice.session_id === 'string') &&
+    Array.isArray(body.questions) &&
+    Array.isArray(body.history) &&
+    Array.isArray(body.recommendation?.focus_points) &&
+    typeof body.streak === 'number'
+  );
+});
+
+await check('quiz difficulty recommendation', async () => {
+  const { status, body } = await getJson(
+    `/api/quiz/difficulty?knowledge_point=${encodeURIComponent('勾股定理')}`,
+  );
+  return (
+    status === 200 &&
+    ['基础', '中等', '拔高'].includes(body.difficulty) &&
+    Array.isArray(body.options) &&
+    body.options.length === 3 &&
+    typeof body.reason === 'string'
+  );
+});
+
+await check('mcp servers list', async () => {
+  const { status, body } = await getJson('/api/mcp/servers');
+  return status === 200 && Array.isArray(body.servers);
+});
+
+await check('visualizations list', async () => {
+  const { status, body } = await getJson('/api/visualize');
+  return status === 200 && Array.isArray(body.visualizations);
+});
+
 async function uploadAudio() {
   const wav = await readFile('testdata/asr-question-16k.wav');
   const form = new FormData();

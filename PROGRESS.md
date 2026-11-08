@@ -1,6 +1,83 @@
 # 智学 实施进度
 
-当前阶段：阶段 I · S21 语音能力已完成（2026-11-07）
+当前阶段：阶段 J · S17 补齐（§6.14 统一可视化引擎）已完成（2026-11-08）；下一项为阶段 I · S23 性能优化与压测（待做，见文末）
+
+阶段 J · S17 补齐：§6.14 统一可视化引擎（交互课件 + 自动可视化合并）已完成（2026-11-08）
+- 前端只保留一个入口 `/visualize`（统一可视化）；`/courseware` 重定向并保留 `?open=` 参数兼容旧链接，侧栏「交互课件」「自动可视化」两条合并为一条
+- 统一渲染器：Three.js（geometry3d/function3d/terrain/biology）、function-plot（function2d/conic，含隐式曲线）、3Dmol（molecule）、内联 SVG（physics/diagram）；旧版单文件 HTML 课件只读，走沙箱 iframe
+- 预置课件库 13 条 spec（`server/src/learning/visualize-presets.ts`）+ 关键词/学科匹配器；命中即复用固定 id `preset:<id>`，不重复建记录、不消耗模型调用
+- 未命中时由模型判定学科与类型并输出 spec（`visualize-engine.ts`），spec 不合法或模型不可用回退预置库；`COURSEWARE_FORCE_TEMPLATE=1` 跳过模型直接回退
+- spec 校验扩展：geometry3d `auxiliary`（9 种 kind + style/reason，逐条显隐）、function2d `functions/relations/regions/sliders`、molecule `format+data`、biology `parts`、terrain `grid|expression`、physics/diagram `elements` 词汇表
+- 对话内自动判定：拍照或题目命中关键词时自动生成可视化，SSE 新增 `visualization` 事件，回答内嵌渲染器；可视化 id 落库到 `messages.visualization_id`，重开会话仍可见
+- 工具合并：删除 `courseware_generate`（含 `courseware/service.ts`、`courseware/tool.ts`、`CoursewareView.vue`、`VizCanvas.vue`），`visualize_generate` 改为统一入口（可只给 question 走预置匹配，或给 type+spec 精确控制）
+- 数据变更：`messages` 新增 `visualization_id` 列；预置可视化改用固定 id；清理了本次验证产生的 18 条重复预置记录（用户手工/生成/旧版课件未动）
+- 新增依赖：web workspace `three@0.187`、`function-plot@1.26`、`3dmol@2.5.5`；渲染器打进 `VizRenderer` 独立 chunk（1.45 MB / gzip 391 KB），随路由懒加载
+
+历史：阶段 J · S31 3D 课件与机制收尾已完成（2026-11-07）
+- 课件生成支持 2D/3D：立体几何、空间结构、分子等主题要求 canvas 3D 投影；失败回退内置 3D 模板（拖拽旋转、缩放、自动旋转、顶点/棱/面）
+- `COURSEWARE_FORCE_TEMPLATE=1` 可强制模板，便于离线验收；3D 模板无任何外部脚本/CDN
+- 新增长期记忆 Markdown 镜像 `data/memory/{id}.md` 与课件 HTML 镜像 `data/courseware/{id}.html`，删除时同步清理（SQLite 仍为事实源）
+- 新增角色 Skills：tutor（socratic/mind/edulab）、quizzer（quiz-gen/mind）、analyst（mind）、solver（mind/edulab），Pi 可从角色 `.pi/skills` 发现
+- Hooks 行为仍由代码等价实现（画像注入、工具写回、历史回放压缩）；未注册 Pi 自定义 hook 扩展
+- 解题视频按设计 §3.2 不内置渲染管线，优先外部 MCP；本版本不提供视频生成
+
+阶段 J · S30 题目驱动自动可视化已完成（2026-11-07）
+- 新增 `visualizations` 表与 `/api/visualize`（列表/生成/读取/删除）；spec 校验覆盖 geometry3d、function2d/3d、conic 与通用类型
+- 新增 `visualize_generate` 工具（Tutor/Solver）并注册；生成后返回 `/visualize?id=...` 链接
+- 新增 `/visualize` 页面与 `VizCanvas`：函数曲线 SVG、立体几何可拖拽旋转/缩放/重置；其他类型展示 spec 预览
+- 前端安全表达式求值（无 eval，支持 + - * / ^、sin/cos/sqrt/log/ln/exp 等）
+- 新增 `scripts/check-visualize.ts` 隔离校验
+
+阶段 J · S29 MCP 自选接入已完成（2026-11-07）
+- 新增 `mcp_servers` 表与 MCP 服务：stdio / HTTP / SSE，env/headers AES 加密存储，接口只回键名
+- 新增 `/api/mcp/servers`（列表/添加/编辑/启停/删除/连接测试）、`/api/mcp/tools`、单工具授权接口
+- 连接测试发现工具并缓存；工具以 `mcp__服务__工具` 注册为 Pi customTools，Tutor/Quizzer/Analyst/Solver 已允许 `mcp__*`
+- 新增 `/mcp` 管理页：添加向导、连接状态、工具授权、编辑/删除与安全提示
+- 同步 `data/pi-agent/mcp.json` 供 Pi 原生 MCP 使用；新增 `scripts/check-mcp.ts` 与本地 mock MCP 服务
+
+阶段 J · S28 难度校准与复习提醒已完成（2026-11-07）
+- 新增 `recommendDifficulty`：按知识点 BKT 掌握度推荐基础（<50%）/中等（50–75%）/拔高（≥75%）；无数据默认中等
+- `quiz.generate` 难度省略或 `auto` 时自动采用推荐难度，响应返回 `difficulty/recommended_difficulty/mastery`；新增 `GET /api/quiz/difficulty`
+- QuizView 难度新增“推荐”选项与掌握度提示；`quiz_generate` 工具描述同步
+- 复习提醒：App 启动探测到期错题，顶栏显示“待复习 N”，每天首次打开弹出应用内提醒（localStorage 按日去重）
+
+阶段 J · S27 文件夹批量导入已完成（2026-11-07）
+- 资料库支持文件夹选择（`webkitdirectory`）与拖拽文件夹，递归收集 PDF/Word/TXT/Markdown；前端按 20 个/批上传，单次最多 100 个/300MB
+- 新增 `POST /api/documents/batch`（与 `/api/documents` 共用处理）：`paths` 传相对路径，后端限制 50 个/200MB，逐文件返回状态
+- documents 新增 `source_path`；相对路径作为章节前缀写入切片（如 `数学 / 函数 / ...`），资料列表展示路径并支持搜索
+- 新增 `scripts/check-documents.ts` 隔离校验（路径规范化、source_path、章节元数据）
+- `EDU_UPLOADS_DIR` 可用于隔离测试上传目录
+
+阶段 J · S26 每日练习已完成（2026-11-07）
+- 新增 `daily_practices` 表与每日练习服务：每天一组 5 题，优先掌握度薄弱点与到期错题；题库已有题目优先复用，不足时再生成
+- 新增 `GET /api/daily`、`POST /api/daily/start`、`POST /api/daily/answer`：按日幂等、逐题作答、完成时联动掌握度/错题本，并统计连续天数与 7 日记录
+- QuizView 新增“每日练习”卡：今日重点、完成度、连续天数、开始/继续/已完成状态；每日作答走独立提交入口
+- 新增 `scripts/check-daily.ts` 隔离数据目录校验
+
+阶段 J · S25 回复完整性已完成（2026-11-07）
+- 截断判定：读取 Pi `stopReason=length`，并检查代码围栏、括号与悬空结尾标点
+- 自动续写：携带断点末尾提示从断点继续，最多 3 次；重叠片段去重拼接；续写期间继续累计 usage
+- PI 会话控制：续写前 `waitForIdle`，订阅保持到续写结束，避免尾部分片与续写并发
+- 手动兜底：`POST /api/conversations/:id/messages` 支持 `continue:true`（新增续写气泡）与 `regenerate:true`（替换最后一条回复）
+- SSE 新增 `continuation` / `incomplete` 事件；前端最后一条回复下方显示“继续生成 / 重新生成”，截断提示保留到刷新
+- 新增 `server/scripts/check-continuation.ts` 纯函数校验
+
+阶段 J · S24 学习计划已完成（2026-11-07）
+- 新增 `learning_plans` 表与计划服务：按目标/天数/每日时长生成每日任务，自动引用薄弱知识点、到期错题与同学科资料
+- 新增 `GET /api/plan`、`POST /api/plan/generate`、`PUT /api/plan/:id`、`PUT /api/plan/:id/tasks/:taskId`、`POST /api/plan/:id/archive`、`DELETE /api/plan/:id`
+- 新增 `plan_make` 工具（Tutor/Analyst 可用）；生成新计划自动归档旧计划，任务勾选实时计算进度，全部完成标记 completed
+- 新增 `/plan` 学习计划页：目标与重点、完成度仪表盘、每日任务清单、计划依据、归档历史、生成/调整弹层；侧栏“学习”新增入口
+- 新环境变量 `EDU_DATA_DIR`：数据目录可覆盖，用于隔离测试（默认仍为 server/data）
+
+阶段 I · S22 存储治理已完成（2026-11-07）
+- 新增存储服务：`GET /api/media/storage` 汇总图片/资料占用、磁盘文件、数据库体积、配额状态与 80%/95%/100% 分级告警
+- 新增 `POST /api/media/cleanup`：孤儿文件预检/回收（未被消息引用的图片记录、无登记记录的上传文件）、按保留期清理、清理审计记录
+- 配额：默认 1024MB（`STORAGE_QUOTA_MB`，0 关闭），超出时新上传返回 507 `STORAGE_QUOTA_EXCEEDED`（图片与资料统一）
+- 删除会话时回收仅被该会话引用的图片；删除资料时连同上传的原始文件一起清理
+- 周期清理：按 `STORAGE_CLEANUP_HOURS`（默认 24h）回收早于 `STORAGE_RETENTION_DAYS`（默认 30 天）的孤儿文件
+- UI：`/storage` 存储治理页（用量概览、配额进度、占用构成、预检与清理、清理记录、策略），侧栏“系统”新增入口
+
+阶段 I · S21 语音能力已完成（2026-11-07）
 - 本地 ASR：sherpa-onnx Paraformer 中文小模型（离线），`GET /api/asr` 状态、`POST /api/asr`（WAV，8k~48kHz，≤60s）
 - 前端录音：MediaRecorder + AnalyserNode 波形、计时、取消/停止；录音结束后在浏览器内重采样为 16k 单声道 WAV，识别文字进入输入框可编辑
 - TTS：`GET /api/tts` 能力、`POST /api/tts`；默认浏览器 speechSynthesis（优先本地中文音色，语速可调并持久化），配置 `TTS_BASE_URL/TTS_MODEL/TTS_VOICE` 后走 OpenAI 兼容 `/audio/speech` 返回音频
@@ -22,12 +99,74 @@
 - 消息分页（`limit` + `before` 游标）；前端缓存会话列表与最近 5 个会话（各 40 条消息，12 小时 TTL）
 - `/api/chat` 兼容保留：无 conversationId 时自动建会话；SSE 新增 conversation/media 事件；流式写入串行化并冲刷，修复短回复丢帧
 
-历史：H 进阶与收尾 —— 已完成（S17、S18 验收通过）；已增加 Docker 本地部署
+历史：H 进阶、安全与收尾 —— 已完成（S17 统一可视化与安全、S18 验收通过）；已增加 Docker 本地部署
 旧编号 S19/S20（模型设置、用量统计）已于 2026-11-07 完成，见下方验收证据
-已完成对话：S01–S18 全部完成（A–H）；阶段 I S19 会话管理、S20 图片输入、S21 语音能力完成
-下一步对话：S22 存储治理（用量统计、孤儿回收、按周期清理、删会话连带删除）
+已完成：S01–S22 与 S24–S31（A–H + 阶段 I 的 S19–S22 + 阶段 J 扩展批次）；S23 性能优化与压测尚未实施
+下一步：阶段 I · S23 性能优化与压测（里程碑 6：TTFT/P95 达标、语义缓存生效）；解题视频按 §3.2 外接 MCP 后置，不在本期自研
 
 关键文件/接口：
+- server/src/learning/visualize-presets.ts：13 条预置可视化 spec 与关键词/学科匹配器
+- server/src/learning/visualize-engine.ts：统一生成流程（预置优先 → 模型判定 spec → 回退预置）与自动判定关键词
+- server/src/learning/visualize.ts：spec 校验（auxiliary/functions/relations/regions/sliders/molecule/biology/terrain/elements）、统一列表/读取/删除（含 legacy 课件）、固定 id `preset:<id>` 去重
+- server/src/courseware/legacy.ts：旧版单文件 HTML 课件只读访问（列表/取 HTML/删除）
+- server/src/routes/visualize.ts：`/api/visualize` 与 `/api/visualize/generate`
+- server/src/routes/courseware.ts：兼容门面（列表转统一、生成转引擎、`/:id` 仍返回 legacy HTML 并带 CSP）
+- server/src/chat/handler.ts：回答后自动判定并落库 `messages.visualization_id`，SSE `visualization` 事件
+- web/src/components/VizRenderer.vue：统一分发器 + 工具条（重置/自动旋转/辅助线/标注/全屏/截图）
+- web/src/components/viz/{ThreeScene,FunctionChart,MoleculeChart,ShapeSvg,LegacyFrame}.vue：共用渲染器
+- web/src/components/InlineViz.vue：对话内嵌可视化（实时事件或按 visualization_id 回捞）
+- web/src/views/VisualizeView.vue：统一可视化页（题目生成 + 手工新建 + 合并列表）
+- 已删除（2026-11-08 合并）：server/src/courseware/service.ts（单文件 HTML 生成）、server/src/courseware/tool.ts（courseware_generate 工具）、web/src/views/CoursewareView.vue、web/src/components/VizCanvas.vue
+- server/src/learning/memory.ts：记忆写入/删除的 Markdown 镜像
+- server/agent-workspace/roles/*/.pi/skills/*/SKILL.md：socratic / quiz-gen / mind / edulab 技能
+- server/scripts/check-s31.ts：技能发现、3D 模板与文件镜像校验
+- server/src/learning/visualize.ts：可视化类型/spec 校验/存储/删除与 visualize_generate 工具
+- server/src/routes/visualize.ts：/api/visualize 系列接口
+- web/src/views/VisualizeView.vue + web/src/components/viz/* + web/src/utils/{visualize,expression}.ts：统一可视化页、四类共用渲染器与安全表达式求值（原 VizCanvas.vue 已并入）
+- server/scripts/check-visualize.ts：spec 校验与表达式求值校验
+- server/src/mcp/service.ts：MCP 配置/密钥、stdio/HTTP/SSE 连接、工具发现/授权/调用、Pi 工具注册与 mcp.json 同步
+- server/src/routes/mcp.ts：/api/mcp/servers 与工具接口
+- web/src/views/McpView.vue + web/src/api/mcp.ts：MCP 管理页与客户端
+- server/scripts/check-mcp.ts + scripts/mock-mcp-server.mjs：MCP 全链路隔离校验与本地 mock
+- server/src/learning/quiz.ts：recommendDifficulty 与 generateQuiz 自动难度
+- server/src/routes/learning.ts：GET /api/quiz/difficulty；generate 返回推荐/实际难度
+- web/src/views/QuizView.vue：推荐难度选项与掌握度提示
+- web/src/App.vue：到期错题探测、顶栏待复习徽标与每日应用内提醒
+- server/scripts/check-difficulty.ts：掌握度阈值校验
+- server/src/routes/documents.ts：/api/documents 与 /api/documents/batch（paths 相对路径、50 文件/200MB 限制）
+- server/src/documents/service.ts：source_path 归一化、文件夹章节前缀、解析/重解析复用
+- server/src/store.ts：documents.source_path 列与迁移
+- web/src/views/DocumentsView.vue：文件夹选择/拖拽、分批上传、路径展示与搜索
+- server/scripts/check-documents.ts：文件夹路径与章节元数据校验
+- server/src/learning/daily.ts：每日选题（薄弱点/到期错题/题库优先）、幂等开始、逐题作答、完成结算、连续天数与历史
+- server/src/routes/daily.ts：/api/daily 系列接口
+- web/src/api/daily.ts + web/src/views/QuizView.vue：今日练习卡与每日作答流程
+- server/scripts/check-daily.ts：每日练习隔离校验
+- server/src/chat/integrity.ts：截断判定、重叠续写拼接、自动/手动续写提示词
+- server/src/pi.ts：stopReason 捕获、自动续写循环（≤3）、waitForIdle 与订阅生命周期
+- server/src/chat/handler.ts：continue/regenerate 分支、续写落库与替换旧回复
+- server/src/conversations/service.ts：lastMessageByRole / deleteMessage
+- web/src/api/chat.ts + web/src/stores/chat.ts + web/src/views/ChatView.vue：continuation/incomplete 事件、继续生成/重新生成按钮与截断标记保留
+- server/scripts/check-continuation.ts：截断/拼接/提示词校验
+- server/src/learning/plan.ts：计划生成（薄弱点/错题/资料依据）、查询、调整、任务勾选、进度、归档与校验
+- server/src/routes/plan.ts：/api/plan 全套接口（生成/调整/任务/归档/删除）
+- server/src/learning/tools.ts：plan_make 工具；server/src/agents/roles.ts：Tutor/Analyst 注册
+- web/src/views/PlanView.vue：计划页（仪表盘、每日任务、依据、历史、生成/调整弹层）
+- web/src/api/plan.ts：计划客户端
+- server/scripts/check-plan.ts：隔离数据目录的计划闭环脚本（生成/勾选/调整/完成/归档/校验）
+- server/src/storage/service.ts：存储扫描（媒体/资料/磁盘/缺失文件）、孤儿候选、清理执行、审计记录、周期任务
+- server/src/storage/quota.ts：配额配置（STORAGE_QUOTA_MB/RETENTION_DAYS/CLEANUP_HOURS）、分级告警与上传前校验
+- server/src/storage/refs.ts：消息附件引用集、会话媒体 ID 收集
+- server/src/storage/paths.ts：uploads/media 路径统一出口
+- server/src/routes/media.ts：GET /api/media/storage、POST /api/media/cleanup、上传配额校验
+- server/src/media/service.ts：removeMedia/releaseUnreferencedMedia；会话删除后释放未引用图片
+- server/src/conversations/service.ts + server/src/routes/conversations.ts：删除会话时收集附件并返回回收统计
+- server/src/documents/service.ts + server/src/routes/documents.ts：删除资料时移除上传文件；资料上传配额校验
+- server/src/store.ts：storage_cleanups 审计表
+- server/src/index.ts：启动周期清理（setInterval，unref）
+- web/src/views/StorageView.vue：存储治理页（配额轨道、占用构成、预检/确认清理、记录与策略）
+- web/src/api/storage.ts：存储统计与清理客户端
+- server/scripts/check-storage.ts：级联删除、资料文件清理、保留期清理、配额守卫端到端脚本
 - server/src/voice/asr.ts：sherpa-onnx Paraformer 加载、WAV 解析（8k~48kHz/16-bit）、16k 重采样、识别与文本清洗
 - server/src/routes/voice.ts：GET/POST /api/asr、GET/POST /api/tts（浏览器模式/OpenAI 兼容服务端 TTS）
 - server/scripts/fetch-asr-model.ts + server/models/README.md：ASR 模型下载（hf-mirror，约 82MB，不入库）
@@ -66,11 +205,62 @@
 - server/src/routes/courseware.ts：/api/courseware（列表/生成/预览 HTML/删除），HTML 带 CSP 与 nosniff
 - server/src/index.ts：/api/chat 接入安全检查（400 SECURITY_BLOCKED）、输入/输出脱敏、SSE security 事件；后端托管 web/dist（SPA 回退，API 404 保持 JSON）
 - server/scripts/eval-rag.ts + server/testdata/eval-rag.json：RAG 评测集（8 题）与 Hit@K/MRR/延迟统计
-- server/scripts/regression.ts：全流程回归（36 项，含设置/用量 5 项、会话 7 项、图片 4 项、语音 4 项）
+- server/scripts/regression.ts：全流程回归（40 项，含设置/用量 5 项、会话 7 项、图片 4 项、存储 4 项、语音 4 项）
 - server/scripts/check-security.ts：安全单测（PII/密钥/注入/流式脱敏）
 - web/src/views/CoursewareView.vue：课件页（生成、列表、沙箱 iframe 预览）；路由 /courseware
 
+验收证据（2026-11-08 实测 · §6.14 统一可视化）：
+- 单入口：侧栏只剩「统一可视化」一条；`/courseware` 自动重定向到 `/visualize`，`?open=<旧课件id>` 仍可定位到 legacy 项
+- 预置命中不耗模型：`POST /api/visualize/generate {"question":"水分子的空间构型"}` 连续 3 次返回同一 id `preset:water-molecule`，列表只 1 条（合并前每次新建记录，已修）
+- 预置匹配器：「正方体截面」命中 cube-section，「今天天气不错」不命中（check-s31 断言）
+- Three.js：正方体与截面 canvas 截图 dataURL 34,890 字符，点「辅助线/截面」后变为 31,630（截面平面确实被显隐）；工具条 6 个按钮（重置视角/自动旋转/辅助线/标注/全屏/截图）齐全；截图提示「截图已下载」
+- function-plot：二次函数与直线交点渲染出 1 个区域填充 path + 4 个标记点（2 交点 + 2 零点），图例两条函数可勾选显隐，无报错
+- 3Dmol：水分子 preset 渲染出 WebGL canvas，无控制台错误
+- SVG 物理：斜面受力 preset 渲染 5 条线、3 条带箭头受力线、6 段标注
+- 对话自动判定：问「斜面受力分析…不用画图」，模型未调工具时 SSE 发出 `visualization` 事件（matched=preset）；模型自己调 `visualize_generate` 时按链接复用同一条，不重复生成
+- 持久化：`messages.visualization_id` 落库，重开会话 `/chat?c=...` 仍内嵌渲染出受力图（5 线/3 箭头）并带「在统一可视化中打开」链接
+- 回归与校验：`regression.ts` ALL PASS、`check-s31.ts` 15/15 ALL PASS、`check-visualize.ts` ALL PASS；`vue-tsc -b && vite build` 通过；825px 宽度 `scrollWidth == innerWidth` 无横向溢出，控制台无错误
+- 依赖体积：`VizRenderer` 独立 chunk 1.45 MB（gzip 391 KB），随 `/visualize` 与 `/chat` 路由懒加载
+
 验收证据（2026-11-07 实测）：
+- S31 3D 课件：强制模板生成“正方体截面 · 3D 交互课件”；浏览器 canvas 非白像素 25,723，拖拽后像素哈希变化（旋转生效），无 `script[src]`/外链，缩放滑块存在
+- S31 机制：`check-s31.ts` 8/8 PASS（四个角色的 SKILL.md 发现、3D 模板、记忆 Markdown 镜像、课件 HTML 镜像与删除清理；脚本原名 check-s30.ts）
+- S31 存储：记忆写入生成 `data/memory/{id}.md`，删除同步移除；课件生成 `data/courseware/{id}.html`，删除同步移除
+- S31 Docker：镜像重建后全量回归 45/45 PASS；`/api/courseware` 返回 3D 课件，HTML 含“3D 交互课件”；`:3000` 正常
+- S30 可视化 API：function2d（x^2-4，[-6,6]）与 geometry3d（正方体 8 点/12 棱/2 面）创建均 201；列表返回 2 条；浏览器函数曲线 SVG path 6668 字符；几何体 12 条棱、2 个面，拖动后坐标变化（旋转生效）
+- S30 UI：/visualize 在 1440/500 宽度正常，无控制台错误；函数页显示表达式与区间，几何页显示点数/棱数
+- S30 隔离校验：`scripts/check-visualize.ts` 11/11 PASS（表达式、创建、几何、校验、工具、删除）
+- S29 MCP 连接：本地 mock stdio 服务连接 687ms，发现 echo / sum 两个工具；工具调用 `echo:hello` 正确；禁用 echo 后调用返回 MCP_TOOL_DISABLED
+- S29 MCP 智能体：对话中 Solver 实际调用 `mcp__mock__sum(a=2,b=3)` 并返回 5；Tutor 会话可见 `mcp__mock__sum` 且不可见已禁用的 echo
+- S29 MCP 管理页：卡片显示已连接/本地 stdio/工具 2/2，工具授权勾选可实时落库；1440/500 宽度正常，无控制台错误
+- S29 隔离校验：`scripts/check-mcp.ts` 9/9 PASS（加密、连接发现、调用、授权、Pi 工具注册、mcp.json 同步/删除）
+- S28 难度校准：勾股定理掌握度 99.9% → 推荐拔高；无记录知识点 → 中等；低/中/高掌握度分别推荐基础/中等/拔高（check-difficulty 4/4 PASS）；自动难度生成实际返回 `difficulty=拔高`、2 道题
+- S28 复习提醒：页面加载后顶栏显示“待复习 6”，并弹出“今日复习提醒：有 6 道错题到期”；同日去重；无控制台错误
+- S27 文件夹导入：API `POST /api/documents/batch` 上传 2 个文件并携带 `paths=["数学/函数/a.txt","数学/函数/b.txt"]`，均 parsed；文档 `source_path` 正确，切片章节为 `数学 / 函数`；删除后文档与文件清理
+- S27 前端：资料页显示“导入文件夹”按钮、隐藏 `webkitdirectory` 输入与拖拽区域；浏览器模拟选择 2 个文件后提示“2 个文件已接收”，列表刷新；无控制台错误
+- S27 隔离校验：`scripts/check-documents.ts` 7/7 PASS（路径规范化、source_path、章节元数据、Markdown）
+- S26 每日练习：题库 30 题环境下开始今日练习生成 5 题（薄弱点+错题优先），重复开始幂等复用；浏览器作答 1 题后进度 1/5，剩余题目完成后 5/5、正确率 60%、连续 1 天；每日历史记录 1 条
+- S26 隔离校验：`scripts/check-daily.ts` 14/14 PASS（空状态、开始/幂等、逐题完成、完成后拒绝再答、连续天数、历史）
+- S26 回归：`scripts/regression.ts` 42/42 PASS（新增 daily endpoint）
+- S25 自动续写：本地 mock OpenAI（每次 finish_reason=length）实测 3 次 continuation + incomplete 事件；最终 answer 2487 字符、包含 4 段模型输出；落库 2 条消息（user + assistant）
+- S25 手动继续：对已有回答调用 `continue:true` 流式接口，SSE 正常 delta/done，消息总数 2→3，且没有新增 user 消息
+- S25 重新生成：调用 `regenerate:true`，旧 assistant 被替换，消息总数保持 3；旧回答不残留
+- S25 前端：浏览器触发截断后显示“输出可能被截断 / 继续生成 / 重新生成”；点击继续生成后消息行 2→3，点击重新生成后保持 3 行
+- S25 纯函数：`scripts/check-continuation.ts` 10/10 PASS（围栏/括号/冒号、重叠拼接、提示词）
+- S24 计划生成：目标“两周补完函数基础，期末数学提高15分”生成 7 天计划，引用 8 个薄弱点、6 道到期错题与同学科资料；调整为 14 天后 50 项任务、进度归零；任务勾选后进度 0%→3%，全部完成时 status=completed；归档后 GET 返回空计划并进入历史
+- S24 计划校验：空目标 / 天数 0 / 每日 5 分钟 / 编辑已归档计划分别返回 PLAN_GOAL_REQUIRED / PLAN_DAYS_RANGE / PLAN_MINUTES_RANGE / PLAN_ARCHIVED；check-plan.ts 13/13 PASS
+- S24 计划 UI：390/500 与桌面宽度无横向溢出；计划页显示目标、重点、仪表盘、14 天任务、依据与历史；勾选任务实时更新进度；调整弹层预填并经 UI 保存成功（目标改为提高20分）
+- S24 回归：`scripts/regression.ts` 41/41 PASS（新增 plan endpoint）；开发实例 3100 实测
+- S22 用量统计：`GET /api/media/storage` 返回配额 1024MB、已用 21.7MB（2.1%）、资料 4 份（2 PDF / 1 MD / 1 TXT）、磁盘 4 个文件；清理前另有 3 条孤儿图片（113,474B）被识别
+- S22 清理：预检返回 3 个可回收文件 / 271KB；执行后移除图片记录 2 个、资料文件 1 个，释放 271KB，孤儿归零，`storage_cleanups` 新增一条记录并在 UI 清理记录中可见
+- S22 删会话级联：上传 40,322B PNG 并写入带附件的测试会话；`DELETE /api/conversations/:id` 返回 `media_removed=1`、`bytes_freed=40322`，随后 `GET /api/media/:id` 返回 404，磁盘文件同步删除
+- S22 资料清理：上传 27B TXT 后文件存在，`DELETE /api/documents/:id` 后上传文件消失，磁盘文件数由 5 降到 4，无新增未跟踪文件
+- S22 按保留期清理：构造 2,048B 孤儿文件并将 mtime 回拨 3 天；`mode=retention&olderThanDays=1` 预检命中 1 项且不删除，执行后文件被移除并记录释放 2,048B
+- S22 配额：以 `STORAGE_QUOTA_MB=1` 启动测试实例，配额状态 `exceeded`（2167.5%）；图片上传返回 507 `STORAGE_QUOTA_EXCEEDED`，唯一 TXT 资料上传同样返回 507
+- S22 配额分级：按当前 21.68MB 占用实测 27MB→warning 80.3%、22.5MB→warning 94.2%、22.1MB→critical 98.5%、21MB→exceeded 103.2%、0→unlimited
+- S22 UI：`/storage` 在 1440/768/390 宽度下 `scrollWidth = innerWidth`；预检列表、确认弹层（3 个文件 / 271KB）、执行结果与清理记录均正常；768 宽度指标卡为 2×2；无控制台错误
+- S22 回归：`scripts/regression.ts` 40/40 PASS（开发实例 3100 与 Docker 3000 各跑一次）；`scripts/check-storage.ts` 9/9 PASS（统计、引用、级联、资料文件、保留期预检/执行、配额、审计）
+- S22 Docker：镜像重建后 `/api/media/storage` 与 `/storage` 正常，容器内路径为 `/app/server/uploads`；日志输出“周期清理已启用：每 24 小时回收早于 30 天的孤儿文件”
 - S21 本地 ASR：sherpa-onnx Paraformer zh small（82MB）加载后，6.65s 中文题音频识别为“已知直角三角形两条直角边分别是三和四求斜边长度”；开发机首请求 3.2s（含模型加载）/解码 145ms，Docker 首请求 1.5s/解码 70~79ms
 - S21 浏览器录音：Edge 假麦克风（16k WAV）实测麦克风按钮→录音面板 00:06、28 根波形柱、取消可清空；停止后识别文字进入输入框，发送后正常回答
 - S21 TTS：浏览器共有 324 个系统/在线音色；默认优先本地 Huihui，切换 Kangkang 与语速 1.3x 后 localStorage 持久化；试听与单条回复朗读均使 `speechSynthesis.speaking=true`，按钮高亮；未配置服务端 TTS 时 `POST /api/tts` 返回 `{mode:'browser'}`
@@ -106,12 +296,13 @@
 启动方式：
 - 开发：npm run milvus:up；npm run dev（server 3000 + web 5173）
 - Docker（本地试用，2026-11-07 实测）：docker compose -f docker/docker-compose.yml up -d --build；访问 http://localhost:3000；数据挂载 server/data 与 server/uploads；容器内 Milvus 地址 milvus:19530；实测 health、模型、SPA、资料、RAG、对话（含引用）全部正常
-- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts；图片问答：scripts/check-vision.ts；语音：scripts/check-voice.ts
+- 回归：cd server && node --import jiti/register scripts/regression.ts；评测：scripts/eval-rag.ts；安全单测：scripts/check-security.ts；图片问答：scripts/check-vision.ts；语音：scripts/check-voice.ts；存储治理：scripts/check-storage.ts（建议先启动服务，BASE_URL 可覆盖）
+- 存储治理配置：STORAGE_QUOTA_MB（默认 1024，0 关闭）、STORAGE_RETENTION_DAYS（默认 30）、STORAGE_CLEANUP_HOURS（默认 24，0 关闭）
 - 语音模型：npm run asr:model（下载到 server/models，约 82MB；不入库；Docker 构建前需先下载）
 
 关键决策与偏离（需评审知悉）：
 1. 安全为自研轻量策略（规则 + 脱敏 + 流式过滤），未接入 SuperAgent 安全 SDK（设计与 §4.3 均标注其为 P2 可选）。
-2. 课件未移植 edulab 工程，采用"LLM 生成单文件 HTML + 校验 + 内置模板兜底"，满足离线可看与交互；3D 由 canvas 表现，非 Three.js。
+2. 课件未移植 edulab 工程；2026-11-08 按 §6.14 合并为统一可视化引擎后，不再由 LLM 生成单文件 HTML，改为「预置 spec 命中 → 模型生成 spec → 回退预置」，由 Three.js/function-plot/3Dmol/SVG 共用渲染器渲染；旧的单文件 HTML 课件保留为只读 legacy 项（沙箱 iframe + CSP），不再生成新的 HTML 课件。
 3. 文档上传内容未做 PII 脱敏（仅对话链路），文档切片进入向量库前未过滤敏感信息。
 4. 危险工具拦截未实现：当前工具集无 bash/edit 等系统级工具。
 5. 评测集为 8 题小样本、单一标注来源，指标用于回归而非学术评测。
@@ -126,6 +317,19 @@
 14. TTS 默认使用浏览器 speechSynthesis（系统 SAPI 音色，默认优先本地中文音色，语速可调并持久化），未接 edge-tts/piper：当前 MaaS 没有 TTS 接口，本地再引入一套 TTS 模型收益低；`POST /api/tts` 保留 OpenAI 兼容服务端 TTS 配置（TTS_BASE_URL/TTS_MODEL/TTS_VOICE）。
 15. 录音交互为点击开始/停止 + 波形/计时/取消（非按住说话）；录音在浏览器解码后重采样为 16k 单声道 WAV，服务端接受 8k~48kHz 并交给 sherpa 重采样。
 16. 在线音色会把朗读文本发送到系统语音服务；UI 明确提示，默认选择本地音色。
+17. 存储配额只限制“新上传”（图片/资料统一返回 507），不回溯删除已有文件；默认 1024MB，`STORAGE_QUOTA_MB=0` 关闭；告警阈值为 80%/95%/100%。
+18. 孤儿定义：未被任何消息 attachments 引用的 media 行，以及 uploads 中无 DB 记录的文件；清理永不删除被引用图片。按保留期清理只回收超过保留期的孤儿，避免误删刚上传但尚未发送的图片。
+19. 会话删除仅在图片不再被其他消息引用时才物理删除；资料删除直接移除上传原始文件。周期清理任务随服务启动注册，首次执行在间隔到期后（默认 24h），不在启动瞬间扫描。
+20. 2026-11-08 按设计文档（13.4 任务表 + 第 14 章）重排编号：S23 归「性能优化与压测」（尚未实施），原 S23–S30 八项已完成扩展顺延为 S24–S31。对照：学习计划 S23→S24、回复完整性 S24→S25、每日练习 S25→S26、文件夹导入 S26→S27、难度校准与复习提醒 S27→S28、MCP S28→S29、自动可视化 S29→S30、3D 课件/技能/存储镜像 S30→S31；`scripts/check-s30.ts` 同步更名 `check-s31.ts`。git 历史只到 S21（e52ee3b），S22 之后的实现尚未提交；本次重排只改文档与脚本名，不改写历史。文档 13.3 路线图把 J 标为「性能优化压测」，与 13.4/第 14 章将 S23 归入阶段 I 自相矛盾；本表以任务表为准（S23 属阶段 I，阶段 J 为扩展批次），建议把 13.3 的 J 节点改名为「J 扩展与体验收尾」。
+
+设计文档功能审计（2026-11-07，对照 §3.1/§5.8.2/§6.1–§6.14）：
+- 已覆盖：S01–S22、S24–S31；P0/P1 主链路全部落地，P2 安全、统一可视化（§6.14 已合并落地）、MCP 已完成，回归 45/45 PASS。
+- 待做｜性能优化与压测（S23，§6.15 + 第 14 章 S23）：语义缓存、模型分级路由、上下文精简、Cross-Encoder 裁剪与 TTFT/P95 压测尚未实施，对应里程碑 6（延迟达标）。P0 提速措施（流式、快模型、精简上下文）自 S04 起已在执行。
+- 已完成｜学习计划（S24）、回复完整性（S25）、每日练习（S26）、文件夹导入（S27）、难度校准与复习提醒（S28）、MCP（S29）、自动可视化（S30）、3D 课件/技能/存储镜像（S31）。
+- 未实现（主动裁剪）｜解题视频（§3.1 P2）：§3.2 明确完整视频管线不在本期自研，优先外部 MCP；本版本不提供视频生成。
+- 机制差异｜Hooks（§6.4）：画像注入、工具写回、历史回放压缩由代码等价实现，未注册 Pi 自定义 hook 扩展；MCP 服务由自研 SDK 客户端直接注册为 customTools，未使用 Pi 内置 MCP 扩展。
+- 机制差异｜自动可视化其他类型（2026-11-08 更新）：molecule 已用 3Dmol、geometry3d/function3d/terrain/biology 已用 Three.js、function2d/conic 已用 function-plot、physics/diagram 用内联 SVG 词汇表；仍未引入 GeoGebra 与外部预置 3D 模型库（biology 用球体+标注近似细胞结构），edulab 工程未移植，预置库改为自研 13 条 spec。
+- 存储策略｜§7.2：SQLite 仍为事实源，长期记忆与课件额外镜像为 Markdown/HTML 文件，兼顾查看与迁移。
 
 遗留问题与风险：
 - GitHub 直连依赖 SteamTools TLS 代理 + 仓库级 CA；gh 尚未登录，triage 标签未创建；本地历史与远程初始提交不相关，尚未推送
@@ -133,10 +337,25 @@
 - 引用卡片会累积低相关项；后台任务单 Worker 串行且失败无重试
 - 会话搜索为 `LIKE`（标题/消息内容），消息量很大时无 FTS 索引；上下文回放只取最近 24 条，超长会话的早期细节可能丢失
 - 同一会话内不同角色仍各用独立 Pi 会话，但会通过 SQLite 历史重建共享上下文；跨会话仅共享画像/记忆/掌握度
-- 图片上传后若未发送或会话被删，文件暂为孤儿，等 S22 存储治理统一回收；当前没有单张删除接口
+- 媒体暂无单张删除接口；未发送的图片可在存储治理页立即回收，或等周期清理（默认保留 30 天）
+- 存储清理为物理删除且不可撤销；UI 已提供预检与确认，但仍无法撤销误清理
+- 配额按数据库登记的逻辑大小统计；未登记孤儿单独列在“可回收文件”中，不计入配额占比
+- 周期清理只在当前服务进程内运行；本地单实例场景足够，多实例部署会重复扫描
 - 图片内容本身可能含提示注入；OCR 文本已加“仅作解题材料”包裹，但未做图像级内容审核
 - HEIC 等格式依赖浏览器解码，无法解码时提示改用 JPG/PNG；OCR 会额外消耗一次模型调用（实测约 20s）
 - ASR 模型约 82MB 且不入库：新环境/新镜像构建前必须 `npm run asr:model`，否则 `/api/asr` 返回 503 并提示
 - 中文 Paraformer 不输出标点、无热词/自定义词表；识别结果进入输入框由用户校对后发送
 - TTS 音色依赖操作系统语音包；在线 Natural 音色需要网络并会把文本发给系统语音服务；服务端 TTS 仅实现 OpenAI 兼容协议，未对真实云 TTS 做联调
 - 麦克风需在 localhost 或 HTTPS 下使用；录音音频不落库（隐私优先），无法回放原始录音
+
+待做：阶段 I · S23 性能优化与压测（设计文档 13.4 / 13.5 里程碑 6 / 第 14 章 S23 / §6.15）
+- 前置：S22 存储治理（已完成）
+- 目标：响应延迟达标、缓存生效
+- 步骤：
+  1. 语义缓存（相似问题命中）、prompt 精确缓存与 embedding 缓存
+  2. 模型分级路由（快模型默认、思考强度调低）与上下文精简（RAG Top 3–5、历史摘要截断）
+  3. 简单查询跳过 Cross-Encoder，减少 agent 层数，工具并行调用
+  4. 配置就近节点与连接池，用 §6.10 用量数据压测 TTFT 与端到端 P50/P95
+- 产出：缓存与路由模块、性能压测报告
+- 验收：TTFT/P95 达标，缓存命中可秒回
+- 贯穿性要求：P0 提速措施（流式、快模型、精简上下文）自 S04 起即执行，S23 只做集中优化与压测

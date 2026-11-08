@@ -31,6 +31,7 @@ export interface ConversationMessage {
   attachments: string | null;
   agent: string | null;
   citations: string | null;
+  visualization_id: string | null;
   created_at: number;
 }
 

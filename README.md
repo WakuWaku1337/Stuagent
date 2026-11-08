@@ -41,18 +41,28 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 |---|---|---|
 | GET | /health | 健康检查 |
 | GET | /api/model | 当前模型与配置状态 |
-| POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/media/route/delta/citations/done/error）；支持 `mediaIds` 图片输入；无 conversationId 时自动建会话 |
+| POST | /api/chat | 对话（`stream:true` 走 SSE：conversation/media/route/delta/citations/continuation/incomplete/done/error）；支持 `mediaIds` 图片输入；无 conversationId 时自动建会话 |
+| POST | /api/conversations/:id/messages | 在指定会话继续对话；`continue:true` 从断点续写、`regenerate:true` 重新生成上一条回复 |
 | POST | /api/media/upload | 上传图片（multipart `file`，最多 4 张、单张 ≤8MB，仅 JPG/PNG/WebP） |
 | GET | /api/media/:id | 读取图片（immutable 缓存、nosniff） |
+| GET | /api/media/storage | 存储用量、配额状态、孤儿文件与清理记录 |
+| POST | /api/media/cleanup | 孤儿回收 / 按保留期清理（`dryRun` 预检） |
 | GET | /api/asr | 语音识别状态（模型是否就绪） |
 | POST | /api/asr | 语音转文字（multipart `audio`，16-bit PCM WAV，8k~48kHz，≤60s） |
 | GET | /api/tts | TTS 模式（浏览器 / 服务端） |
 | POST | /api/tts | 朗读文本（未配置服务端 TTS 时返回 `{mode:'browser'}`，否则返回音频） |
 | GET/POST | /api/conversations | 历史会话列表（`q` 搜索、`limit/offset` 分页）/ 新建会话 |
 | GET/PUT/DELETE | /api/conversations/:id | 会话详情与消息（`limit/before` 分页）/ 重命名与置顶 / 删除 |
+| GET | /api/plan | 当前学习计划、完成统计与归档历史 |
+| POST | /api/plan/generate | 按目标/天数/每日时长生成计划（自动归档旧计划） |
+| PUT | /api/plan/:id | 调整计划参数并重算每日任务 |
+| PUT | /api/plan/:id/tasks/:taskId | 勾选/取消计划任务，自动计算进度 |
+| POST/DELETE | /api/plan/:id/archive · /api/plan/:id | 归档计划 / 删除计划 |
+| GET | /api/daily | 今日练习状态、题目、连续天数与推荐重点 |
+| POST | /api/daily/start · /api/daily/answer | 开始/继续今日练习 / 提交单题（完成时联动掌握度与错题本） |
 | GET | /api/conversations/:id/messages | 消息分页（`limit`、`before` 游标） |
-| POST | /api/conversations/:id/messages | 在指定会话继续对话（SSE，原上下文续聊） |
-| POST/GET | /api/documents | 上传（multipart，支持多文件）/ 文档列表 |
+| POST/GET | /api/documents | 上传（multipart，支持多文件与 `paths` 相对路径）/ 文档列表 |
+| POST | /api/documents/batch | 文件夹批量导入（`paths` 保留相对路径，逐文件返回状态） |
 | GET/DELETE | /api/documents/:id | 文档详情与切片 / 删除（含向量） |
 | POST | /api/documents/:id/reparse / index | 重新解析 / 重新灌库 |
 | POST | /api/knowledge/search | 混合检索 + 精排 + 引用 |
@@ -60,7 +70,13 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET | /api/wrongbook | 错题列表（`?due=1` 只看待复习） |
 | POST | /api/wrongbook/:id/review | SM-2 复习（quality 0-5） |
 | GET | /api/mastery | BKT 掌握度 |
-| POST | /api/quiz/generate · /api/quiz/answer | 出题 / 答题判分 |
+| POST | /api/quiz/generate · /api/quiz/answer | 出题 / 答题判分（难度省略时按掌握度推荐） |
+| GET | /api/quiz/difficulty | 按知识点掌握度推荐出题难度 |
+| GET/POST | /api/mcp/servers | MCP 服务列表 / 添加（stdio、HTTP、SSE；env/headers 加密） |
+| PUT/DELETE | /api/mcp/servers/:id | 编辑/启停 / 删除 MCP 服务 |
+| POST | /api/mcp/servers/:id/test | 连接测试并发现工具 |
+| GET | /api/mcp/tools | 已发现且已授权的 MCP 工具 |
+| PUT | /api/mcp/servers/:id/tools/:toolName | 单工具授权开关 |
 | POST | /api/bank/extract | 从资料提取题库 |
 | POST | /api/exam/start · /api/exam/:id/submit | 模考开始 / 交卷分析 |
 | GET | /api/agents | 子智能体列表（Tutor/Quizzer/Analyst/Solver） |
@@ -68,8 +84,10 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | POST | /api/reviews/recognize | 整卷识别（拍照 PNG/JPG、PDF、DOCX、文本） |
 | GET | /api/reviews · /api/reviews/:id · /api/reviews/compare | 考试记录 / 详情 / 趋势对比 |
 | POST | /api/reviews/:id/analyze | 生成复盘报告（判分、错因、BKT、错题联动） |
-| GET/POST | /api/courseware | 交互课件列表 / 生成（单文件 HTML，离线可用） |
-| GET | /api/courseware/:id | 课件 HTML（CSP 沙箱） |
+| GET/POST | /api/visualize | 统一可视化列表（含旧版课件）/ 按 spec 生成 |
+| POST | /api/visualize/generate | 按题目生成：预置课件库优先，未命中由模型判定类型与 spec |
+| GET/DELETE | /api/visualize/:id | 统一可视化对象 / 删除（课件与生成结果同一入口） |
+| GET | /api/courseware/:id | 旧版单文件课件 HTML（CSP 沙箱，只读兼容） |
 | GET | /api/settings/providers | Provider 与模型目录 |
 | GET/PUT | /api/settings/model | 当前模型 / 切换 Provider 与模型 |
 | GET/PUT | /api/settings/apikey · /api/settings/keys | 密钥列表（掩码）/ 保存、更新、删除 |
@@ -78,11 +96,23 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET | /api/usage/summary · /api/usage/daily · /api/usage/cost | 用量汇总 / 每日明细 / 成本 |
 | GET | /api/usage/export?format=csv|json | 导出用量明细 |
 
-页面：`/` 首页、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、语音输入与朗读、引用卡片、KaTeX、角色徽标）、`/documents` 资料库、`/quiz` 出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/courseware` 交互课件、`/settings` 模型设置、`/usage` 用量统计。
+页面：`/` 首页、`/plan` 学习计划（目标拆解、每日任务勾选、调整与归档）、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、语音输入与朗读、引用卡片、KaTeX、角色徽标、截断续写）、`/documents` 资料库、`/quiz` 出题与每日练习、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化（交互课件与自动可视化合并，`/courseware` 自动跳转）、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展。
 
 技术栈前端：Vue3 + Vite + Element Plus + ECharts（按需加载），统一水墨蓝主题与移动端抽屉导航。
 
 安全：对话接口内置注入拦截、手机号/身份证/银行卡/邮箱脱敏、密钥过滤，流式输出同样生效。
+
+资料库：支持多文件与文件夹批量导入（`webkitdirectory` 或拖拽文件夹），相对路径写入 `source_path` 并作为切片章节前缀；单次最多 50 个文件 / 200MB，前端文件夹上限 100 个 / 300MB。
+
+出题与复习：难度默认“推荐”，按知识点 BKT 掌握度选择基础/中等/拔高；错题到期时顶栏显示“待复习 N”，每天首次打开会弹出复习提醒。
+
+MCP：支持 stdio 本地进程与 HTTP/SSE 远程服务，连接测试后自动发现工具；工具以 `mcp__服务__工具` 注册给 Tutor/Quizzer/Analyst/Solver，可逐项授权。env 与 headers 加密保存，接口只返回键名。
+
+统一可视化：交互课件与自动可视化已合并为一个入口。提问或拍照后先匹配预置课件库（13 条 spec，命中即复用同一条记录、不消耗模型调用），未命中才由模型判定学科与类型输出 spec，失败回退预置。渲染器共用：立体几何/三维函数/地形/细胞结构用 Three.js，函数与圆锥曲线用 function-plot（多函数叠加、交点与零点标记、不等式区域填充、参数滑块、图例显隐），化学分子用 3Dmol，受力/电路/示意用内联 SVG。工具条提供旋转缩放、重置视角、辅助线/截面显隐、标注、自动旋转、全屏与截图；辅助元素附带添加理由。回答内嵌可视化，并把 `visualization_id` 落库，重开会话仍然可见。旧的单文件 HTML 课件保留为只读项（沙箱 iframe + CSP），不再生成新的 HTML 课件。长期记忆镜像到 `server/data/memory/*.md`。
+
+解题视频：按设计 §3.2 不在本期自研渲染管线；如需视频，可通过 `/mcp` 接入外部解题视频 MCP 服务。
+
+回复完整性：读取 `finish_reason=length` 并检查代码围栏/括号闭合，自动携带断点续写最多 3 次；仍未完成时 SSE 发出 `incomplete` 事件，前端显示“继续生成 / 重新生成”。
 
 图片：前端压缩到最长边 1600px（JPEG 0.85）后上传，文件存于 `server/uploads/media`；视觉模型直接读图；非视觉模型自动用同 Provider 的视觉模型做 OCR（可用 `LLM_OCR_MODEL` 指定 OCR 模型），`LLM_VISION=0/1` 可覆盖视觉能力判断。图片消息与 OCR 文本随会话持久化，重开可续聊。
 
@@ -92,11 +122,20 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 
 ```bash
 cd server
-node --import jiti/register scripts/regression.ts   # 全流程回归（36 项）
+node --import jiti/register scripts/regression.ts   # 全流程回归（45 项）
 node --import jiti/register scripts/eval-rag.ts     # RAG 评测（Hit@K / MRR / 延迟）
 node --import jiti/register scripts/check-security.ts  # 安全策略单测
 node --import jiti/register scripts/check-vision.ts # 图片问答端到端（上传→读图/OCR→作答）
 node --import jiti/register scripts/check-voice.ts  # 语音端到端（ASR→文本、TTS 模式）
+node --import jiti/register scripts/check-storage.ts # 存储治理（级联、保留期清理、配额）
+node --import jiti/register scripts/check-plan.ts   # 学习计划（生成、勾选、调整、归档、校验）
+node --import jiti/register scripts/check-continuation.ts # 截断判定、续写拼接与提示词
+node --import jiti/register scripts/check-daily.ts  # 每日练习（生成、作答、完成、连续天数）
+node --import jiti/register scripts/check-documents.ts # 文件夹导入相对路径与章节元数据
+node --import jiti/register scripts/check-difficulty.ts # 掌握度 → 出题难度校准
+node --import jiti/register scripts/check-mcp.ts    # MCP 服务接入、工具发现/授权/调用与配置同步
+node --import jiti/register scripts/check-visualize.ts # 可视化 spec 校验与表达式求值
+node --import jiti/register scripts/check-s31.ts    # 统一可视化引擎（预置匹配、spec 校验、统一列表/删除）、SKILL.md 与记忆镜像
 ```
 
 ## 生产构建

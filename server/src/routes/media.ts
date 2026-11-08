@@ -6,6 +6,7 @@ import {
   saveImage,
   toAttachment,
 } from '../media/service.ts';
+import { runCleanup, storageStats, type CleanupMode } from '../storage/service.ts';
 
 const media = new Hono();
 
@@ -33,6 +34,33 @@ media.post('/upload', async (c) => {
     }
   }
   return c.json(items.length === 1 ? items[0] : { items }, 201);
+});
+
+media.get('/storage', async (c) => c.json(await storageStats()));
+
+media.post('/cleanup', async (c) => {
+  const body = await c.req
+    .json<{ mode?: string; olderThanDays?: number; dryRun?: boolean }>()
+    .catch(() => null);
+  if (!body) return c.json({ code: 'INVALID_BODY', error: '请求体必须是 JSON' }, 400);
+  const mode = body.mode ?? 'orphans';
+  if (mode !== 'orphans' && mode !== 'retention') {
+    return c.json({ code: 'INVALID_MODE', error: 'mode 必须是 orphans 或 retention' }, 400);
+  }
+  if (body.olderThanDays !== undefined) {
+    if (!Number.isFinite(body.olderThanDays) || body.olderThanDays < 1 || body.olderThanDays > 3650) {
+      return c.json({ code: 'INVALID_DAYS', error: 'olderThanDays 必须在 1~3650 之间' }, 400);
+    }
+  }
+  if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
+    return c.json({ code: 'INVALID_DRY_RUN', error: 'dryRun 必须是布尔值' }, 400);
+  }
+  const result = await runCleanup({
+    mode: mode as CleanupMode,
+    olderThanDays: body.olderThanDays,
+    dryRun: body.dryRun,
+  });
+  return c.json(result);
 });
 
 media.get('/:id', async (c) => {

@@ -9,6 +9,8 @@ import {
 } from '../conversations/service.ts';
 import { handleChat, type ChatBody } from '../chat/handler.ts';
 import { dropConversationSessions } from '../pi.ts';
+import { releaseUnreferencedMedia } from '../media/service.ts';
+import { conversationMediaIds } from '../storage/refs.ts';
 
 const conversations = new Hono();
 
@@ -84,11 +86,17 @@ conversations.put('/:id', async (c) => {
   return updated ? c.json(updated) : c.json({ error: '会话不存在' }, 404);
 });
 
-conversations.delete('/:id', (c) => {
+conversations.delete('/:id', async (c) => {
   const id = c.req.param('id');
+  const mediaIds = conversationMediaIds(id);
   if (!deleteConversation(id)) return c.json({ error: '会话不存在' }, 404);
   dropConversationSessions(id);
-  return c.json({ deleted: id });
+  const released = await releaseUnreferencedMedia(mediaIds);
+  return c.json({
+    deleted: id,
+    media_removed: released.removed,
+    bytes_freed: released.bytes,
+  });
 });
 
 conversations.post('/:id/messages', async (c) => {

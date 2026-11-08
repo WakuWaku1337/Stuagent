@@ -8,8 +8,11 @@ import { routeMessage } from '../agents/router.ts';
 import {
   addMessage,
   createConversation,
+  deleteMessage,
   getConversation,
+  lastMessageByRole,
   listMessages,
+  setMessageVisualization,
   type Conversation,
 } from '../conversations/service.ts';
 import {
@@ -22,6 +25,9 @@ import {
   toAttachment,
   type MediaRow,
 } from '../media/service.ts';
+import { manualContinuationPrompt } from './integrity.ts';
+import { generateVisualization, shouldAutoVisualize } from '../learning/visualize-engine.ts';
+import { getUnifiedVisualization, type UnifiedVisualization } from '../learning/visualize.ts';
 import { modelOrDefault, modelSupportsVision } from '../settings/providers.ts';
 import { getSettings } from '../settings/store.ts';
 
@@ -33,6 +39,8 @@ export interface ChatBody {
   agent?: string;
   reasoning?: string;
   mediaIds?: string[];
+  continue?: boolean;
+  regenerate?: boolean;
 }
 
 function mergeCitations(target: Citation[], incoming: Citation[] | undefined): void {
@@ -124,6 +132,184 @@ async function buildHistory(
   return history;
 }
 
+async function handleContinuation(
+  c: Context,
+  body: ChatBody,
+  preset?: Conversation,
+): Promise<Response> {
+  const conversation =
+    preset ??
+    (body.conversationId?.trim() ? getConversation(body.conversationId.trim()) : undefined);
+  if (!conversation) return c.json({ error: '继续或重新生成需要已有会话' }, 400);
+
+  const assistant = lastMessageByRole(conversation.conversation_id, 'assistant');
+  if (!assistant) return c.json({ error: '该会话还没有可续写的回复' }, 400);
+
+  const regenerate = body.regenerate === true;
+  const settings = getSettings();
+  const vision = modelSupportsVision(modelOrDefault(settings.provider, settings.model));
+  const reasoning =
+    body.reasoning === 'low' || body.reasoning === 'medium' || body.reasoning === 'high'
+      ? body.reasoning
+      : undefined;
+
+  let modelInput: string;
+  let history: ChatHistoryItem[];
+  let replaceMessageId: string | null = null;
+  if (regenerate) {
+    const user = lastMessageByRole(conversation.conversation_id, 'user');
+    if (!user) return c.json({ error: '该会话还没有可重新生成的问题' }, 400);
+    modelInput = redactPII(user.content).text || '请重新回答上一条问题。';
+    history = await buildHistory(conversation.conversation_id, assistant.message_id, vision);
+    if (history[history.length - 1]?.role === 'user') history = history.slice(0, -1);
+    replaceMessageId = assistant.message_id;
+  } else {
+    modelInput = manualContinuationPrompt(assistant.content);
+    history = await buildHistory(conversation.conversation_id, '', vision);
+  }
+
+  const decision: { agent: AgentId; reason: string } = isAgentId(body.agent)
+    ? { agent: body.agent, reason: '用户指定' }
+    : await routeMessage(modelInput);
+  const conversationInfo = conversationPayload(conversation);
+
+  const saveAssistant = (text: string, citations: Citation[]): boolean => {
+    const filtered = filterOutput(text).text;
+    if (!filtered.trim()) return false;
+    try {
+      addMessage(conversation.conversation_id, {
+        role: 'assistant',
+        content: filtered,
+        agent: AGENTS[decision.agent].name,
+        citations,
+      });
+      if (replaceMessageId) deleteMessage(replaceMessageId);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (body.stream) {
+    return streamSSE(c, async (stream) => {
+      const redactor = new StreamRedactor();
+      const citations: Citation[] = [];
+      let assistantText = '';
+      let saved = false;
+      const persist = (text: string) => {
+        if (saved) return;
+        if (saveAssistant(text, citations)) saved = true;
+      };
+
+      let writeChain: Promise<void> = Promise.resolve();
+      const emit = (event: string, payload: unknown) => {
+        writeChain = writeChain
+          .then(() => stream.writeSSE({ event, data: JSON.stringify(payload) }))
+          .catch(() => undefined);
+      };
+
+      try {
+        await stream.writeSSE({ event: 'conversation', data: JSON.stringify(conversationInfo) });
+        await stream.writeSSE({
+          event: 'route',
+          data: JSON.stringify({
+            type: 'route',
+            agent: decision.agent,
+            agent_name: AGENTS[decision.agent].name,
+            reason: decision.reason,
+          }),
+        });
+        await chat(
+          conversation.conversation_id,
+          modelInput,
+          (event: ChatEvent) => {
+            if (event.type === 'delta' && event.text) {
+              assistantText += event.text;
+              const filtered = redactor.push(event.text);
+              if (filtered) emit('delta', { ...event, text: filtered });
+              return;
+            }
+            if (event.type === 'citations') {
+              mergeCitations(citations, event.citations);
+              emit(event.type, event);
+              return;
+            }
+            if (event.type === 'done') {
+              const full = filterOutput(event.text ?? assistantText).text;
+              const tail = redactor.flush();
+              if (tail) emit('delta', { type: 'delta', text: tail });
+              persist(full);
+              emit('done', { type: 'done', text: full, regenerated: regenerate });
+              return;
+            }
+            if (event.type === 'error') persist(assistantText);
+            emit(event.type, event);
+          },
+          c.req.raw.signal,
+          decision.agent,
+          { reasoning, history },
+        );
+      } catch (e) {
+        persist(assistantText);
+        emit('error', { type: 'error', message: e instanceof Error ? e.message : String(e) });
+      } finally {
+        await writeChain;
+      }
+    });
+  }
+
+  try {
+    const citations: Citation[] = [];
+    const raw = await chat(
+      conversation.conversation_id,
+      modelInput,
+      (event) => {
+        if (event.citations) mergeCitations(citations, event.citations);
+      },
+      c.req.raw.signal,
+      decision.agent,
+      { reasoning, history },
+    );
+    const filtered = filterOutput(raw);
+    if (filtered.text.trim()) saveAssistant(filtered.text, citations);
+    return c.json({
+      sessionId: conversation.conversation_id,
+      conversation_id: conversation.conversation_id,
+      conversation_title: conversation.title,
+      agent: decision.agent,
+      agent_name: AGENTS[decision.agent].name,
+      route_reason: decision.reason,
+      reply: filtered.text,
+      citations,
+      continued: !regenerate,
+      regenerated: regenerate,
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+}
+
+async function autoVisualize(
+  question: string,
+  hasImages: boolean,
+  answerText: string,
+): Promise<{ visualization: UnifiedVisualization; matched: string } | null> {
+  const linked = answerText.match(/\/visualize\?id=([0-9a-f-]{36})/i)?.[1];
+  if (linked) {
+    const existing = getUnifiedVisualization(linked);
+    if (existing) return { visualization: existing, matched: 'tool' };
+  }
+  if (!shouldAutoVisualize(question, hasImages)) return null;
+  try {
+    const result = await generateVisualization({ question });
+    if (!result) return null;
+    return { visualization: result.visualization as UnifiedVisualization, matched: result.matched };
+  } catch {
+    // 自动可视化失败不影响主回复
+    return null;
+  }
+}
+
 export async function handleChat(
   c: Context,
   body: ChatBody,
@@ -142,6 +328,12 @@ export async function handleChat(
     ),
   ];
   if (mediaIds.length > 4) return c.json({ error: '一次最多发送 4 张图片' }, 400);
+  if (body.continue || body.regenerate) {
+    if (body.continue && body.regenerate) {
+      return c.json({ error: 'continue 与 regenerate 不能同时使用' }, 400);
+    }
+    return handleContinuation(c, body, preset);
+  }
   if (!message && mediaIds.length === 0) return c.json({ error: 'message 或图片不能为空' }, 400);
 
   const reasoning =
@@ -229,6 +421,7 @@ export async function handleChat(
       const citations: Citation[] = [];
       let assistantText = '';
       let saved = false;
+      let assistantMessageId = '';
 
       const persistAssistant = (text: string) => {
         if (saved) return;
@@ -236,12 +429,12 @@ export async function handleChat(
         if (!filtered.trim()) return;
         saved = true;
         try {
-          addMessage(conversation!.conversation_id, {
+          assistantMessageId = addMessage(conversation!.conversation_id, {
             role: 'assistant',
             content: filtered,
             agent: AGENTS[decision.agent].name,
             citations,
-          });
+          }).message_id;
         } catch {
           // 流式期间会话可能被删除，丢弃本次回复
         }
@@ -306,6 +499,13 @@ export async function handleChat(
           decision.agent,
           { reasoning, history, images },
         );
+        const autoViz = await autoVisualize(routeText, mediaIds.length > 0, assistantText);
+        if (autoViz) {
+          if (assistantMessageId) {
+            setMessageVisualization(assistantMessageId, autoViz.visualization.visualization_id);
+          }
+          emit('visualization', { type: 'visualization', ...autoViz });
+        }
       } catch (e) {
         persistAssistant(assistantText);
         emit('error', { type: 'error', message: e instanceof Error ? e.message : String(e) });
@@ -328,17 +528,22 @@ export async function handleChat(
       { reasoning, history, images },
     );
     const filtered = filterOutput(raw);
+    let assistantMessageId = '';
     if (filtered.text.trim()) {
       try {
-        addMessage(conversation.conversation_id, {
+        assistantMessageId = addMessage(conversation.conversation_id, {
           role: 'assistant',
           content: filtered.text,
           agent: AGENTS[decision.agent].name,
           citations,
-        });
+        }).message_id;
       } catch {
         // 会话在生成期间被删除，丢弃本次回复
       }
+    }
+    const autoViz = await autoVisualize(routeText, mediaIds.length > 0, filtered.text);
+    if (autoViz && assistantMessageId) {
+      setMessageVisualization(assistantMessageId, autoViz.visualization.visualization_id);
     }
     return c.json({
       sessionId: conversation.conversation_id,
@@ -350,6 +555,8 @@ export async function handleChat(
       reply: filtered.text,
       citations,
       media: mediaInfo,
+      visualization: autoViz?.visualization,
+      visualization_matched: autoViz?.matched,
       security: { ...securityInfo, output_redactions: filtered.hits },
     });
   } catch (e) {

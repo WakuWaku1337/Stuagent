@@ -1,4 +1,5 @@
 import type { MessageAttachment } from './conversations';
+import type { Visualization } from './visualize';
 
 export interface Citation {
   index: number;
@@ -20,10 +21,16 @@ export interface ChatStreamEvent {
     | 'route'
     | 'conversation'
     | 'security'
-    | 'media';
+    | 'media'
+    | 'continuation'
+    | 'incomplete'
+    | 'visualization';
   text?: string;
   message?: string;
   citations?: Citation[];
+  visualization?: Visualization;
+  matched?: string;
+  attempt?: number;
   agent?: string;
   agent_name?: string;
   reason?: string;
@@ -76,6 +83,7 @@ export async function streamChatIn(
   signal?: AbortSignal,
   reasoning?: 'low' | 'medium' | 'high',
   mediaIds?: string[],
+  action?: 'continue' | 'regenerate',
 ): Promise<void> {
   const url = conversationId
     ? `/api/conversations/${encodeURIComponent(conversationId)}/messages`
@@ -88,6 +96,8 @@ export async function streamChatIn(
       stream: true,
       ...(reasoning ? { reasoning } : {}),
       ...(mediaIds?.length ? { mediaIds } : {}),
+      ...(action === 'continue' ? { continue: true } : {}),
+      ...(action === 'regenerate' ? { regenerate: true } : {}),
     }),
     signal,
   });

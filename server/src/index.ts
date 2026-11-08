@@ -17,9 +17,15 @@ import usageRoutes from './routes/usage.ts';
 import conversations from './routes/conversations.ts';
 import media from './routes/media.ts';
 import voice from './routes/voice.ts';
+import plan from './routes/plan.ts';
+import daily from './routes/daily.ts';
+import mcpRoutes from './routes/mcp.ts';
+import visualize from './routes/visualize.ts';
 import { handleChat, type ChatBody } from './chat/handler.ts';
 import { searchKnowledge } from './rag/service.ts';
 import { AGENTS } from './agents/roles.ts';
+import { startStorageJanitor } from './storage/service.ts';
+import { syncMcpJson } from './mcp/service.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const envPath = resolve(serverRoot, '.env');
@@ -94,6 +100,10 @@ app.route('/api/settings', settingsRoutes);
 app.route('/api/usage', usageRoutes);
 app.route('/api/conversations', conversations);
 app.route('/api/media', media);
+app.route('/api/plan', plan);
+app.route('/api/daily', daily);
+app.route('/api/mcp', mcpRoutes);
+app.route('/api/visualize', visualize);
 app.route('/api', voice);
 
 app.post('/api/knowledge/search', async (c) => {
@@ -136,5 +146,9 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 });
 injectWebSocket(server);
 startQueue();
+startStorageJanitor();
+syncMcpJson().catch((error) => {
+  console.error('[mcp] 同步 mcp.json 失败:', error instanceof Error ? error.message : error);
+});
 
 export default app;

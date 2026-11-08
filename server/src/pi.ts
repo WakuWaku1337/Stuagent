@@ -11,10 +11,16 @@ import {
 import { createKnowledgeTool } from './rag/tool.ts';
 import type { Citation } from './rag/service.ts';
 import { createLearningTools } from './learning/tools.ts';
-import { createCoursewareTool } from './courseware/tool.ts';
+import { createMcpTools } from './mcp/service.ts';
 import { profileContext } from './learning/memory.ts';
 import { redactPII } from './security/guard.ts';
 import { AGENTS, type AgentId } from './agents/roles.ts';
+import {
+  MAX_CONTINUATIONS,
+  continuationPrompt,
+  looksIncomplete,
+  mergeContinuation,
+} from './chat/integrity.ts';
 import { findProvider, modelOrDefault, modelSupportsVision, type ReasoningLevel } from './settings/providers.ts';
 import {
   getScenarioParams,
@@ -30,14 +36,18 @@ import {
 import { recordUsage } from './usage/store.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
-const agentDir = join(serverRoot, 'data', 'pi-agent');
+const dataRoot = process.env.EDU_DATA_DIR?.trim()
+  ? resolve(process.env.EDU_DATA_DIR)
+  : join(serverRoot, 'data');
+const agentDir = join(dataRoot, 'pi-agent');
 const workspaceRoot = join(serverRoot, 'agent-workspace');
 
 export interface ChatEvent {
-  type: 'delta' | 'done' | 'error' | 'citations';
+  type: 'delta' | 'done' | 'error' | 'citations' | 'continuation' | 'incomplete';
   text?: string;
   message?: string;
   citations?: Citation[];
+  attempt?: number;
 }
 
 export interface ChatImage {
@@ -232,7 +242,7 @@ async function getSession(
     customTools: [
       createKnowledgeTool((citations) => citationSinks.get(key)?.(citations)),
       ...createLearningTools(),
-      createCoursewareTool(),
+      ...(await createMcpTools()),
     ],
     sessionManager: replaySession(agentId, candidate, history),
   });
@@ -335,6 +345,9 @@ export async function chat(
     let errorMessage = '';
     let usageTotals = { input: 0, output: 0, total: 0, reasoning: 0, cost: 0 };
     let emitted = false;
+    let stopReason = '';
+    let continuing = false;
+    let continuationText = '';
 
     try {
       const session = await getSession(sessionId, agentId, candidate, reasoning, options.history);
@@ -344,12 +357,18 @@ export async function chat(
 
       const unsubscribe = session.subscribe((event) => {
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-          fullText += event.assistantMessageEvent.delta;
-          emitted = true;
-          onEvent({ type: 'delta', text: event.assistantMessageEvent.delta });
+          const delta = event.assistantMessageEvent.delta;
+          if (continuing) {
+            continuationText += delta;
+          } else {
+            fullText += delta;
+            emitted = true;
+            onEvent({ type: 'delta', text: delta });
+          }
         } else if (event.type === 'message_end') {
           const msg = event.message as { role?: string; stopReason?: string; errorMessage?: string };
           if (msg.role === 'assistant') {
+            stopReason = msg.stopReason ?? '';
             const usage = usageFromMessage(event.message);
             if (usage) {
               usageTotals = {
@@ -371,6 +390,49 @@ export async function chat(
       signal?.addEventListener('abort', abortHandler);
       try {
         await session.prompt(promptText, options.images?.length ? { images: options.images } : undefined);
+        // 等 session 完全空闲，避免续写提示与尾部分片并发
+        await session.waitForIdle();
+
+        let attempts = 0;
+      while (
+        !signal?.aborted &&
+        attempts < MAX_CONTINUATIONS &&
+        (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText)))
+      ) {
+        attempts += 1;
+        onEvent({ type: 'continuation', attempt: attempts });
+        continuing = true;
+        continuationText = '';
+        stopReason = '';
+        let continuationFailed = false;
+        for (let retry = 0; retry < 2; retry += 1) {
+          try {
+            await session.prompt(continuationPrompt(fullText, attempts));
+            continuationFailed = false;
+            break;
+          } catch {
+            continuationFailed = true;
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+        }
+        continuing = false;
+        await session.waitForIdle();
+        const merged = mergeContinuation(fullText, continuationText);
+        const addition = merged.slice(fullText.length);
+        if (addition) {
+          fullText = merged;
+          emitted = true;
+          onEvent({ type: 'delta', text: addition });
+        }
+        if (continuationFailed || !addition) break;
+      }
+        if (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText))) {
+          onEvent({
+            type: 'incomplete',
+            message: '输出可能被截断，可点击“继续生成”或“重新生成”',
+            attempt: attempts,
+          });
+        }
       } finally {
         unsubscribe();
         citationSinks.delete(sessionKey);

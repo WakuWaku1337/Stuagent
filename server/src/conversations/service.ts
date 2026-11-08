@@ -25,6 +25,7 @@ export interface Message {
   attachments: string | null;
   agent: string | null;
   citations: string | null;
+  visualization_id: string | null;
   created_at: number;
 }
 
@@ -183,6 +184,7 @@ export function addMessage(
     attachments?: unknown;
     agent?: string | null;
     citations?: Citation[];
+    visualizationId?: string | null;
     title?: string;
   },
 ): Message {
@@ -196,8 +198,8 @@ export function addMessage(
   const now = Date.now();
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO messages (message_id, conversation_id, role, msg_type, content, attachments, agent, citations, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (message_id, conversation_id, role, msg_type, content, attachments, agent, citations, visualization_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     conversationId,
@@ -207,6 +209,7 @@ export function addMessage(
     input.attachments == null ? null : JSON.stringify(input.attachments),
     input.agent ?? null,
     input.citations?.length ? JSON.stringify(input.citations) : null,
+    input.visualizationId ?? null,
     now,
   );
 
@@ -226,11 +229,30 @@ export function addMessage(
   return db.prepare('SELECT * FROM messages WHERE message_id = ?').get(id) as unknown as Message;
 }
 
+export function lastMessageByRole(conversationId: string, role: MessageRole): Message | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM messages WHERE conversation_id = ? AND role = ?
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(conversationId, role) as unknown as Message | undefined;
+}
+
+export function deleteMessage(messageId: string): boolean {
+  return db.prepare('DELETE FROM messages WHERE message_id = ?').run(messageId).changes > 0;
+}
+
+export function setMessageVisualization(messageId: string, visualizationId: string): boolean {
+  return (
+    db.prepare('UPDATE messages SET visualization_id = ? WHERE message_id = ?').run(visualizationId, messageId)
+      .changes > 0
+  );
+}
+
 export function listMessages(
   conversationId: string,
   options: { limit?: number; before?: string } = {},
-): MessagePage {
-  const limit = clamp(options.limit ?? 30, 1, 100);
+): MessagePage {  const limit = clamp(options.limit ?? 30, 1, 100);
   let cursor: { created_at: number; rid: number } | undefined;
   if (options.before) {
     cursor = db

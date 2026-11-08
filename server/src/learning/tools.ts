@@ -5,6 +5,8 @@ import { DEFAULT_LEARNER, listMemories, recallMemories, writeMemory } from './me
 import { updateMastery, generateQuiz } from './quiz.ts';
 import { addWrongRecord, listWrongRecords } from './wrongbook.ts';
 import { listMastery } from './mastery.ts';
+import { createPlan } from './plan.ts';
+import { createVisualizeTool } from './visualize.ts';
 import { db } from '../store.ts';
 
 function saveManualQuestion(input: {
@@ -121,7 +123,7 @@ export function createLearningTools() {
     description: '按知识点出单选题。学生要求练习/出题时调用。',
     parameters: Type.Object({
       knowledge_point: Type.String({ description: '知识点' }),
-      difficulty: Type.Optional(Type.String({ description: '基础 | 中等 | 拔高，默认中等' })),
+      difficulty: Type.Optional(Type.String({ description: '基础 | 中等 | 拔高；省略或 auto 时按掌握度推荐' })),
       count: Type.Optional(Type.Number({ description: '题量 1-10，默认 3' })),
     }),
     async execute(_id, params) {
@@ -212,5 +214,39 @@ export function createLearningTools() {
     },
   });
 
-  return [memoryWrite, memoryRecall, wrongbookAdd, masteryUpdate, quizGenerate, dueWrong, masteryReport, examAnalyze, examCompare];
+  const planMake = defineTool({
+    name: 'plan_make',
+    label: '生成学习计划',
+    description:
+      '根据学习目标、可用天数、每日学习时长和当前薄弱点生成学习计划并保存，供学生按日执行。学生提出“制定计划/安排复习”时调用。',
+    parameters: Type.Object({
+      goal: Type.String({ description: '学习目标，例如“两周补完函数基础”' }),
+      days: Type.Optional(Type.Number({ description: '计划天数 1-60，默认 7' })),
+      daily_minutes: Type.Optional(Type.Number({ description: '每日学习时长（分钟）10-180，默认 30' })),
+      subjects: Type.Optional(Type.Array(Type.String(), { description: '涉及学科，可选' })),
+    }),
+    async execute(_id, params) {
+      const plan = createPlan({
+        goal: params.goal,
+        days: params.days,
+        dailyMinutes: params.daily_minutes,
+        subjects: params.subjects,
+      });
+      const preview = plan.content.days
+        .slice(0, 3)
+        .map((day) => `${day.date} ${day.weekday}（${day.focus}）：${day.tasks.map((task) => task.title).join('；')}`)
+        .join('\n');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `已生成 ${plan.days} 天学习计划：${plan.content.summary}\n\n前 3 天安排：\n${preview}`,
+          },
+        ],
+        details: plan,
+      };
+    },
+  });
+
+  return [memoryWrite, memoryRecall, wrongbookAdd, masteryUpdate, quizGenerate, dueWrong, masteryReport, planMake, createVisualizeTool(), examAnalyze, examCompare];
 }

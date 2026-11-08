@@ -7,6 +7,7 @@ import {
   Collection,
   Document,
   Files,
+  FolderOpened,
   Refresh,
   Search,
   UploadFilled,
@@ -16,6 +17,8 @@ import { api, type DocumentItem } from '../api/data';
 
 const docs = ref<DocumentItem[]>([]);
 const fileList = ref<UploadUserFile[]>([]);
+const folderInput = ref<HTMLInputElement>();
+const folderImporting = ref(false);
 const subject = ref('数学');
 const uploading = ref(false);
 const loading = ref(false);
@@ -35,6 +38,7 @@ const visibleDocs = computed(() => {
     if (!keyword) return true;
     return (
       doc.filename.toLowerCase().includes(keyword) ||
+      (doc.source_path ?? '').toLowerCase().includes(keyword) ||
       (doc.subject ?? '').toLowerCase().includes(keyword)
     );
   });
@@ -124,6 +128,148 @@ async function upload() {
   }
 }
 
+const FOLDER_EXTENSIONS = new Set(['.pdf', '.docx', '.doc', '.txt', '.md', '.markdown']);
+const MAX_FOLDER_FILES = 100;
+const MAX_FOLDER_BYTES = 300 * 1024 * 1024;
+const FOLDER_BATCH_FILES = 20;
+
+interface FolderFile {
+  file: File;
+  path: string;
+}
+
+interface FsEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  file?: (success: (file: File) => void, error?: (error: unknown) => void) => void;
+  createReader?: () => {
+    readEntries: (success: (entries: FsEntry[]) => void, error?: (error: unknown) => void) => void;
+  };
+}
+
+function relativePath(file: File): string {
+  const item = file as File & { webkitRelativePath?: string };
+  return item.webkitRelativePath || file.name;
+}
+
+async function uploadFolderFiles(items: FolderFile[]) {
+  const accepted = items.filter((item) => {
+    const index = item.file.name.lastIndexOf('.');
+    return index >= 0 && FOLDER_EXTENSIONS.has(item.file.name.slice(index).toLowerCase());
+  });
+  const skipped = items.length - accepted.length;
+  if (accepted.length === 0) {
+    ElMessage.warning('所选文件夹中没有 PDF / Word / TXT / Markdown 资料');
+    return;
+  }
+  if (accepted.length > MAX_FOLDER_FILES) {
+    ElMessage.error(`一次最多导入 ${MAX_FOLDER_FILES} 个文件，请分批选择`);
+    return;
+  }
+  const totalBytes = accepted.reduce((sum, item) => sum + item.file.size, 0);
+  if (totalBytes > MAX_FOLDER_BYTES) {
+    ElMessage.error('文件夹总大小不能超过 300MB，请分批导入');
+    return;
+  }
+
+  folderImporting.value = true;
+  message.value = '';
+  let uploaded = 0;
+  const failures: string[] = [];
+  try {
+    for (let index = 0; index < accepted.length; index += FOLDER_BATCH_FILES) {
+      const batch = accepted.slice(index, index + FOLDER_BATCH_FILES);
+      const form = new FormData();
+      batch.forEach((item) => form.append('file', item.file, item.file.name));
+      form.append('paths', JSON.stringify(batch.map((item) => item.path)));
+      form.append('subject', subject.value);
+      const res = await fetch('/api/documents/batch', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok && res.status !== 207) {
+        throw new Error(data.message ?? data.error ?? '批量导入失败');
+      }
+      const results = Array.isArray(data.results) ? data.results : [data];
+      for (const result of results) {
+        if (result.status === 'failed') {
+          failures.push(`${result.source_path ?? result.filename}：${result.message ?? '上传失败'}`);
+        } else {
+          uploaded += 1;
+        }
+      }
+    }
+    message.value = failures.length
+      ? `${uploaded} 个文件已接收；${failures.length} 个失败：${failures.slice(0, 4).join('；')}`
+      : `${uploaded} 个文件已接收${skipped ? `（忽略 ${skipped} 个不支持的文件）` : ''}，正在解析与向量化`;
+    if (uploaded > 0) ElMessage.success(`${uploaded} 个文件已接收`);
+    else ElMessage.error(message.value);
+    await load();
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : String(error);
+    ElMessage.error(message.value);
+  } finally {
+    folderImporting.value = false;
+  }
+}
+
+function onFolderPick(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  input.value = '';
+  if (files.length === 0) return;
+  void uploadFolderFiles(files.map((file) => ({ file, path: relativePath(file) })));
+}
+
+function readEntry(entry: FsEntry, base: string, output: FolderFile[]): Promise<void> {
+  if (entry.isFile && entry.file) {
+    return new Promise((resolve, reject) => {
+      entry.file?.(
+        (file) => {
+          output.push({ file, path: `${base}${entry.name}` });
+          resolve();
+        },
+        reject,
+      );
+    });
+  }
+  if (entry.isDirectory && entry.createReader) {
+    const reader = entry.createReader();
+    const readBatch = () =>
+      new Promise<FsEntry[]>((resolve, reject) => {
+        reader.readEntries(resolve, reject);
+      });
+    return (async () => {
+      for (;;) {
+        const batch = await readBatch();
+        if (batch.length === 0) return;
+        for (const child of batch) {
+          await readEntry(child, `${base}${entry.name}/`, output);
+        }
+      }
+    })();
+  }
+  return Promise.resolve();
+}
+
+async function onFolderDrop(event: DragEvent) {
+  const items = Array.from(
+    { length: event.dataTransfer?.items.length ?? 0 },
+    (_, index) => event.dataTransfer!.items[index],
+  );
+  const entries = items
+    .map(
+      (item) =>
+        (item as unknown as { webkitGetAsEntry?: () => FsEntry | null }).webkitGetAsEntry?.(),
+    )
+    .filter((entry): entry is FsEntry => entry !== null && entry !== undefined);
+  if (entries.length === 0) return;
+  const output: FolderFile[] = [];
+  for (const entry of entries) {
+    await readEntry(entry, '', output);
+  }
+  await uploadFolderFiles(output);
+}
+
 async function reindex(doc: DocumentItem) {
   const next = new Set(reindexing.value);
   next.add(doc.document_id);
@@ -193,6 +339,26 @@ onMounted(load);
             <div class="uploader-hint">PDF / Word / TXT / Markdown，单文件不超过 20 MB</div>
           </el-upload>
 
+          <input
+            ref="folderInput"
+            type="file"
+            webkitdirectory
+            multiple
+            accept=".pdf,.docx,.doc,.txt,.md,.markdown"
+            class="folder-input"
+            @change="onFolderPick"
+          />
+          <div class="folder-tools">
+            <el-button plain :icon="FolderOpened" :loading="folderImporting" @click="folderInput?.click()">
+              导入文件夹
+            </el-button>
+            <span class="folder-hint">保留相对路径作为章节分类，单次最多 100 个文件</span>
+          </div>
+          <div class="folder-drop" @dragover.prevent @drop.prevent="onFolderDrop">
+            <el-icon><FolderOpened /></el-icon>
+            <span>或把文件夹拖到这里批量导入</span>
+          </div>
+
           <div class="upload-field">
             <label class="upload-label" for="subject">学科</label>
             <el-input id="subject" v-model="subject" placeholder="数学 / 化学 / 英语…" />
@@ -257,6 +423,9 @@ onMounted(load);
                   <span class="doc-ext">{{ row.file_type }}</span>
                   <span class="doc-file">{{ row.filename }}</span>
                 </div>
+                <span v-if="row.source_path && row.source_path !== row.filename" class="doc-path" :title="row.source_path">
+                  {{ row.source_path }}
+                </span>
                 <span v-if="row.error" class="doc-error">{{ row.error }}</span>
               </template>
             </el-table-column>
@@ -334,6 +503,54 @@ onMounted(load);
   grid-template-columns: 356px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
+}
+
+.folder-input {
+  display: none;
+}
+
+.folder-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.folder-hint {
+  font-size: 11px;
+  color: var(--faint);
+  line-height: 1.5;
+}
+
+.folder-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  font-size: 11.5px;
+  cursor: copy;
+}
+
+.folder-drop:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.doc-path {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 .uploader {

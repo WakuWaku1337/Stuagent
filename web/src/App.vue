@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { Menu } from '@element-plus/icons-vue';
+import { ElNotification } from 'element-plus';
 import SideNav from './components/SideNav.vue';
 import { api } from './api/data';
 
 const route = useRoute();
+const router = useRouter();
 const navOpen = ref(false);
 const online = ref<boolean | null>(null);
 const modelLabel = ref('');
+const dueReviews = ref(0);
 
 const title = computed(() => (route.meta.title as string | undefined) ?? '学习台');
 const subtitle = computed(() => (route.meta.subtitle as string | undefined) ?? '');
@@ -26,11 +29,36 @@ const statusText = computed(() => {
 let timer: ReturnType<typeof setInterval> | undefined;
 
 async function probe() {
-  const [health, model] = await Promise.allSettled([api.health(), api.model()]);
+  const [health, model, wrongbook] = await Promise.allSettled([
+    api.health(),
+    api.model(),
+    api.wrongbook(),
+  ]);
   online.value = health.status === 'fulfilled';
   if (model.status === 'fulfilled' && model.value.configured && model.value.model) {
     modelLabel.value = model.value.model;
   }
+  if (wrongbook.status === 'fulfilled') {
+    dueReviews.value = wrongbook.value.due;
+    remindReviews();
+  }
+}
+
+function remindReviews() {
+  if (dueReviews.value <= 0) return;
+  const today = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const key = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  if (localStorage.getItem('edupi.review.reminded') === key) return;
+  localStorage.setItem('edupi.review.reminded', key);
+  ElNotification({
+    title: '今日复习提醒',
+    message: `有 ${dueReviews.value} 道错题到期，去错题本完成复习。`,
+    type: 'warning',
+    position: 'bottom-right',
+    duration: 8000,
+    onClick: () => router.push('/wrongbook'),
+  });
 }
 
 onMounted(() => {
@@ -74,6 +102,9 @@ onBeforeUnmount(() => {
           <p v-if="subtitle" class="topbar-sub">{{ subtitle }}</p>
         </div>
         <div class="topbar-spacer" />
+        <router-link v-if="dueReviews > 0" to="/wrongbook" class="review-pill">
+          待复习 {{ dueReviews }}
+        </router-link>
         <span class="topbar-date">{{ today }}</span>
         <el-tooltip
           :content="modelLabel ? `模型 ${modelLabel} · 数据保存在本机` : '后端 API 与本地服务状态'"
@@ -94,6 +125,18 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
+.review-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid #ead3b4;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
 .nav-drawer .el-drawer__body {
   background: var(--rail);
   overflow: hidden;

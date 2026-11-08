@@ -1,7 +1,35 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { db } from '../store.ts';
 
 export const DEFAULT_LEARNER = 'default';
+
+const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
+const dataRoot = process.env.EDU_DATA_DIR?.trim()
+  ? resolve(process.env.EDU_DATA_DIR)
+  : resolve(serverRoot, 'data');
+const memoryDir = join(dataRoot, 'memory');
+
+async function mirrorMemory(item: MemoryItem): Promise<void> {
+  try {
+    await mkdir(memoryDir, { recursive: true });
+    const body = [
+      '# 学习记忆',
+      '',
+      `- 类型：${item.type}`,
+      `- 更新时间：${new Date(item.updated_at).toISOString()}`,
+      `- ID：${item.memory_id}`,
+      '',
+      item.content,
+      '',
+    ].join('\n');
+    await writeFile(join(memoryDir, `${item.memory_id}.md`), body, 'utf8');
+  } catch {
+    // 文件镜像失败不影响数据库主链路
+  }
+}
 
 export function ensureLearner(): void {
   const row = db.prepare('SELECT learner_id FROM learners WHERE learner_id = ?').get(DEFAULT_LEARNER);
@@ -32,13 +60,17 @@ export function writeMemory(content: string, type = 'fact'): MemoryItem {
     .get(DEFAULT_LEARNER, trimmed) as { memory_id: string } | undefined;
   if (existing) {
     db.prepare('UPDATE memories SET updated_at = ? WHERE memory_id = ?').run(Date.now(), existing.memory_id);
-    return { memory_id: existing.memory_id, type, content: trimmed, updated_at: Date.now() };
+    const item = { memory_id: existing.memory_id, type, content: trimmed, updated_at: Date.now() };
+    void mirrorMemory(item);
+    return item;
   }
   const memoryId = randomUUID();
   db.prepare(
     'INSERT INTO memories (memory_id, learner_id, type, content, updated_at) VALUES (?, ?, ?, ?, ?)',
   ).run(memoryId, DEFAULT_LEARNER, type, trimmed, Date.now());
-  return { memory_id: memoryId, type, content: trimmed, updated_at: Date.now() };
+  const item = { memory_id: memoryId, type, content: trimmed, updated_at: Date.now() };
+  void mirrorMemory(item);
+  return item;
 }
 
 export function listMemories(limit = 50): MemoryItem[] {
@@ -86,4 +118,5 @@ export function profileContext(): string {
 
 export function deleteMemory(id: string): void {
   db.prepare('DELETE FROM memories WHERE memory_id = ?').run(id);
+  void unlink(join(memoryDir, `${id}.md`)).catch(() => undefined);
 }

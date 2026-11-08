@@ -15,6 +15,28 @@ export interface GeneratedQuestion {
   knowledge_point?: string;
 }
 
+export type Difficulty = '基础' | '中等' | '拔高';
+
+/** 难度校准：掌握度低先补基础，稳定后再拔高。 */
+export function recommendDifficulty(knowledgePoint: string): {
+  difficulty: Difficulty;
+  probability: number | null;
+  reason: string;
+} {
+  const row = getMastery(DEFAULT_LEARNER, knowledgePoint);
+  if (!row) {
+    return { difficulty: '中等', probability: null, reason: '暂无该知识点的掌握度数据，先从中等难度开始' };
+  }
+  const percent = Math.round(row.probability * 1000) / 10;
+  if (row.probability < 0.5) {
+    return { difficulty: '基础', probability: percent, reason: `掌握度 ${percent}%，先用基础题巩固概念` };
+  }
+  if (row.probability < 0.75) {
+    return { difficulty: '中等', probability: percent, reason: `掌握度 ${percent}%，用中等题检验迁移` };
+  }
+  return { difficulty: '拔高', probability: percent, reason: `掌握度 ${percent}%，可以尝试拔高题` };
+}
+
 export async function generateQuiz(input: {
   knowledgePoint: string;
   difficulty?: string;
@@ -22,7 +44,9 @@ export async function generateQuiz(input: {
   subject?: string;
 }): Promise<QuestionRow[]> {
   const count = Math.min(Math.max(input.count ?? 3, 1), 10);
-  const difficulty = input.difficulty ?? '中等';
+  const recommended = recommendDifficulty(input.knowledgePoint);
+  const difficulty =
+    input.difficulty && input.difficulty !== 'auto' ? input.difficulty : recommended.difficulty;
   const result = await chatJson<{ questions: GeneratedQuestion[] }>([
     {
       role: 'system',
