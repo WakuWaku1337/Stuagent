@@ -171,12 +171,18 @@ async function generate() {
   try {
     const result = await generateVisualization({ question: text, subject: subject.value });
     if (!result.visualization) {
-      ElMessage.info('未生成可视化（判定不需要作图或模型暂不可用）');
+      ElMessage.info('未从题目中解析到可建模的图形结构，请补充方程、点、尺寸或场景信息');
       return;
     }
     items.value = [result.visualization, ...items.value];
     selectedId.value = result.visualization.visualization_id;
-    ElMessage.success(result.matched === 'preset' ? '命中预置课件' : '可视化已生成');
+    ElMessage.success(
+      result.matched === 'preset'
+        ? '命中预置模板'
+        : result.basis
+          ? `已按题目建模：${result.basis}`
+          : '已按题目建模',
+    );
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -212,7 +218,7 @@ onMounted(load);
     <header class="viz-head">
       <div>
         <h1 class="viz-title">统一可视化</h1>
-        <p class="viz-sub">交互课件与自动可视化合并为一个入口：提问后优先匹配预置课件库，未命中按题目生成 spec，共用同一套渲染器。</p>
+        <p class="viz-sub">按题目内容本地解析并建模：函数、方程、几何点与尺寸、分子式、物理场景直接转成可视化，不调用对话模型生成图。</p>
       </div>
       <div class="viz-actions">
         <el-button :icon="MagicStick" @click="openCreate('function2d')">函数图像</el-button>
@@ -225,7 +231,7 @@ onMounted(load);
       <div class="viz-generate-row">
         <el-input
           v-model="question"
-          placeholder="输入题目或主题，例如：正方体过三点的截面 / 二次函数与直线交点 / 水分子构型"
+          placeholder="输入题目或主题，例如：y=x^2-4x+3 的图像 / 正方体过 A、C、E 的截面 / 打印机进纸受力"
           maxlength="2000"
           clearable
           @keyup.enter="generate"
@@ -235,7 +241,7 @@ onMounted(load);
         </el-select>
         <el-button type="primary" :icon="MagicStick" :loading="generating" @click="generate">生成可视化</el-button>
       </div>
-      <p class="viz-generate-note">命中预置课件库时直接返回，不消耗模型调用；未命中才由模型判定类型并生成 spec。</p>
+      <p class="viz-generate-note">解析题目中的表达式、点、尺寸与场景后本地建模；题目没有足够结构时不出图，避免给一张无关的示意图。</p>
     </section>
 
     <el-alert
@@ -266,7 +272,7 @@ onMounted(load);
           >
             <span class="viz-item-main">
               <span class="viz-item-title">{{ item.title }}</span>
-              <span class="viz-item-meta">{{ typeLabel(item.type) }} · {{ item.kind === 'preset' ? '预置' : item.kind === 'legacy' ? '旧版' : '生成' }} · {{ new Date(item.created_at).toLocaleDateString('zh-CN') }}</span>
+              <span class="viz-item-meta">{{ typeLabel(item.type) }} · {{ item.kind === 'preset' ? '预置' : item.kind === 'legacy' ? '旧版' : item.source === 'modeler' ? '题目建模' : '生成' }} · {{ new Date(item.created_at).toLocaleDateString('zh-CN') }}</span>
             </span>
             <el-button
               text

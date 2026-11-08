@@ -2,6 +2,17 @@
 
 当前阶段：阶段 J · S17 补齐（§6.14 统一可视化引擎）已完成（2026-11-08）；下一项为阶段 I · S23 性能优化与压测（待做，见文末）
 
+可视化改为题目内容确定性建模（2026-11-08）
+- 移除 `visualize-engine.ts` 里的 `chatJson` 判定与 LLM 生成 spec；`POST /api/visualize/generate` 与对话自动可视化现在只走后端规则解析，不消耗模型调用
+- 新增 `server/src/learning/visualize-modeler.ts`：函数表达式与交点/不等式/区间/参数滑块、圆锥曲线隐式方程、正方体/棱锥命名点/棱长/中点/定比分点/截面、直角三角形/矩形/圆等平面图形、常见分子式（H2O/CH4/NH3/CO2/C2H4/C2H2/C6H6/NaCl）、打印机进纸/斜面/串并联电路/透镜/水平面受力、动物/植物细胞
+- 打印机进纸题会按题目生成滚轮、纸叠、摩擦片和层间摩擦箭头，不再返回无关的斜面预置图；正方体会按 `ABCD-A1B1C1D1`、`E 为 BB1 中点`、`过 A、C、E 的截面`、`棱长 2` 生成实际点/面
+- 函数题按题目表达式建模：`y=x^2-4x+3` 生成二次曲线、零点和实际区间；两条函数加交点关系；不等式生成区域填充；椭圆/双曲线/抛物线用隐式方程
+- 解析不到具体结构时返回 `matched: none` 并提示补充方程、点、尺寸或场景，不用固定预置图硬凑；纯主题问题才回退预置模板
+- 前端 `/visualize` 文案改为“按题目内容本地解析建模”，列表标记“题目建模”，成功提示显示解析依据（如“解析到正方体棱长 2，9 个点”）；渲染器在 `labels:false` 时不再给线框点加文字
+- 验收：`check-visualize.ts` ALL PASS（函数/双函数交点/正方体中点与截面/打印机进纸/分子式/无关题目拒绝/无 LLM 生成）；`check-s31.ts` ALL PASS；Edge 无头截图实际渲染打印机图、二次函数、椭圆、正方体截面；`vue-tsc -b && vite build` 通过
+- 截图：`server/testdata/screens/viz-printer.png`、`viz-function.png`、`viz-conic.png`、`viz-cube.png`
+- 限制：确定性解析不是通用 CAS/几何求解器，任意坐标系、复杂线面角证明、未收录分子和特殊物理装置需要补充解析规则或手动传 type+spec；等高线/三维函数仍以预置或手动 spec 为主
+
 设计文档补做：扫描件 OCR（§6.8.8 / 第 14 章 S05）已完成（2026-11-08）
 - 判定：逐页提取文本 + OperatorList 大图覆盖率，正文 <30 字且整页图 ≥40% 记为需 OCR；需 OCR 页 ≥50% 判为图片型 PDF。实测 24.7MB / 108 页全位图资料：0 字、108/108 页需 OCR、判定 scanned=true；`testdata/chemistry.pdf` 等文本 PDF 仍走同步文本路径（200 parsed，2 切片）
 - 渲染：`pdfjs-dist` + `@napi-rs/canvas`，默认 200 DPI（`OCR_DPI` 150–320）；页面 JPEG 落 `uploads/ocr/<id>/`，实测 1275×1651 的扫描页渲染为 3542×4587（约 0.56–0.97MB/页），原图接口可缓存读取
@@ -16,16 +27,16 @@
 阶段 J · S17 补齐：§6.14 统一可视化引擎（交互课件 + 自动可视化合并）已完成（2026-11-08）
 - 前端只保留一个入口 `/visualize`（统一可视化）；`/courseware` 重定向并保留 `?open=` 参数兼容旧链接，侧栏「交互课件」「自动可视化」两条合并为一条
 - 统一渲染器：Three.js（geometry3d/function3d/terrain/biology）、function-plot（function2d/conic，含隐式曲线）、3Dmol（molecule）、内联 SVG（physics/diagram）；旧版单文件 HTML 课件只读，走沙箱 iframe
-- 预置课件库 13 条 spec（`server/src/learning/visualize-presets.ts`）+ 关键词/学科匹配器；命中即复用固定 id `preset:<id>`，不重复建记录、不消耗模型调用
-- 未命中时由模型判定学科与类型并输出 spec（`visualize-engine.ts`），spec 不合法或模型不可用回退预置库；`COURSEWARE_FORCE_TEMPLATE=1` 跳过模型直接回退
+- 预置课件库 13 条 spec（`server/src/learning/visualize-presets.ts`）+ 关键词/学科匹配器；纯主题问题命中即复用固定 id `preset:<id>`，不重复建记录、不消耗模型调用
+- 具体题目由 `visualize-modeler.ts` 按内容确定性建模；解析不到结构时不出图，不再调用模型判定或生成 spec
 - spec 校验扩展：geometry3d `auxiliary`（9 种 kind + style/reason，逐条显隐）、function2d `functions/relations/regions/sliders`、molecule `format+data`、biology `parts`、terrain `grid|expression`、physics/diagram `elements` 词汇表
 - 对话内自动判定：拍照或题目命中关键词时自动生成可视化，SSE 新增 `visualization` 事件，回答内嵌渲染器；可视化 id 落库到 `messages.visualization_id`，重开会话仍可见
 - 工具合并：删除 `courseware_generate`（含 `courseware/service.ts`、`courseware/tool.ts`、`CoursewareView.vue`、`VizCanvas.vue`），`visualize_generate` 改为统一入口（可只给 question 走预置匹配，或给 type+spec 精确控制）
 - 数据变更：`messages` 新增 `visualization_id` 列；预置可视化改用固定 id；清理了本次验证产生的 18 条重复预置记录（用户手工/生成/旧版课件未动）
 - 新增依赖：web workspace `three@0.187`、`function-plot@1.26`、`3dmol@2.5.5`；渲染器打进 `VizRenderer` 独立 chunk（1.45 MB / gzip 391 KB），随路由懒加载
 - Docker 修复（2026-11-08）：容器 SQLite 原放在 Windows bind mount（9p），`node:sqlite` 报 `disk I/O error` 无限重启；改为命名卷 `docker_app_data:/app/data`（`EDU_DATA_DIR=/app/data`），uploads 仍 bind mount。旧库先 `PRAGMA wal_checkpoint(TRUNCATE)` 再灌入卷；宿主端口支持 `APP_PORT` 覆盖（与 dev 的 3000 共存时用 3100）。实测 restarts=0、读写正常、重启后数据保留
-- 首字体验修复（2026-11-08）：实测一次 chat 调用 100s（10.9k prompt、3.3k reasoning、6.5k completion），思考阶段没有 text_delta，界面长时间空白；另有首次请求撞上服务重启/主动中断时前端拿不到回复。修复：Pi 思考阶段下发 `thinking` 心跳（800ms 节流）；空回复时显示「模型正在思考」；收到 `done` 立即解除发送禁用，不再等自动可视化后处理；自动可视化的模型判定加超时（先 8s，后因判定常被截断调到 20s）
-- 绘图链路修复（2026-11-08）：智能体改为手绘 ASCII 的根因是 `visualize_generate` 只收对象 spec，模型传 JSON 字符串就报「spec 必须是对象」。工具移入 `visualize-engine.ts`：spec 兼容对象/JSON 字符串，只传 question 也走「预置 → 模型判定 → 失败不出图」（不再硬塞无关预置图）；判定 prompt 明确 `|x|` 写 `abs(x)`、分段合并为单式、要求画图时必须出图；渲染端关系式 `f=g` 按图例标签解析，标记计算失败不再拖垮整张图
+- 首字体验修复（2026-11-08）：实测一次 chat 调用 100s（10.9k prompt、3.3k reasoning、6.5k completion），思考阶段没有 text_delta，界面长时间空白；另有首次请求撞上服务重启/主动中断时前端拿不到回复。修复：Pi 思考阶段下发 `thinking` 心跳（800ms 节流）；空回复时显示「模型正在思考」；收到 `done` 立即解除发送禁用，不再等自动可视化后处理；自动可视化现为本地规则建模，无额外模型等待
+- 绘图链路修复（2026-11-08）：智能体改为手绘 ASCII 的根因是 `visualize_generate` 只收对象 spec，模型传 JSON 字符串就报「spec 必须是对象」。工具移入 `visualize-engine.ts`：spec 兼容对象/JSON 字符串；只传 question 时由 `visualize-modeler.ts` 解析具体结构建模，解析不到不出图；渲染端关系式 `f=g` 按图例标签解析，标记计算失败不再拖垮整张图
 - 开发体验修复（2026-11-08）：`node --watch` 对 jiti 加载的模块不总是生效（改引擎代码不重启），server dev 脚本改为 `--watch-path=src`；同时清理了残留的孤儿 dev 进程（会占着 3000 导致新实例起不来、ASR/TTS 校验误报）
 - 对话 UI（2026-11-08）：参考教材改为「参考资料」折叠区，默认收起、标题旁显示条数，展开时箭头旋转；移除重复的「输入中」三点指示，统一由空回复时的思考提示承担
 
@@ -122,7 +133,8 @@
 
 关键文件/接口：
 - server/src/learning/visualize-presets.ts：13 条预置可视化 spec 与关键词/学科匹配器
-- server/src/learning/visualize-engine.ts：统一生成流程（预置优先 → 模型判定 spec → 回退预置）与自动判定关键词
+- server/src/learning/visualize-engine.ts：统一生成入口（题目确定性建模 → 纯主题回退预置 → 不出图）与自动判定关键词
+- server/src/learning/visualize-modeler.ts：函数/圆锥曲线/立体几何/分子/物理/生物题目的规则解析与 spec 生成
 - server/src/learning/visualize.ts：spec 校验（auxiliary/functions/relations/regions/sliders/molecule/biology/terrain/elements）、统一列表/读取/删除（含 legacy 课件）、固定 id `preset:<id>` 去重
 - server/src/courseware/legacy.ts：旧版单文件 HTML 课件只读访问（列表/取 HTML/删除）
 - server/src/routes/visualize.ts：`/api/visualize` 与 `/api/visualize/generate`
@@ -318,7 +330,7 @@
 
 关键决策与偏离（需评审知悉）：
 1. 安全为自研轻量策略（规则 + 脱敏 + 流式过滤），未接入 SuperAgent 安全 SDK（设计与 §4.3 均标注其为 P2 可选）。
-2. 课件未移植 edulab 工程；2026-11-08 按 §6.14 合并为统一可视化引擎后，不再由 LLM 生成单文件 HTML，改为「预置 spec 命中 → 模型生成 spec → 回退预置」，由 Three.js/function-plot/3Dmol/SVG 共用渲染器渲染；旧的单文件 HTML 课件保留为只读 legacy 项（沙箱 iframe + CSP），不再生成新的 HTML 课件。
+2. 课件未移植 edulab 工程；2026-11-08 按 §6.14 合并为统一可视化引擎后，不再由 LLM 生成单文件 HTML，也不再让模型生成 spec，改为「按题目内容确定性建模 → 纯主题回退预置 → 解析不到不出图」，由 Three.js/function-plot/3Dmol/SVG 共用渲染器渲染；旧的单文件 HTML 课件保留为只读 legacy 项（沙箱 iframe + CSP），不再生成新的 HTML 课件。
 3. 文档上传内容未做 PII 脱敏（仅对话链路），文档切片进入向量库前未过滤敏感信息。
 4. 危险工具拦截未实现：当前工具集无 bash/edit 等系统级工具。
 5. 评测集为 8 题小样本、单一标注来源，指标用于回归而非学术评测。

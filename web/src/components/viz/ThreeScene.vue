@@ -92,7 +92,9 @@ function buildGeometry(spec: Record<string, unknown>) {
     );
     sphere.position.copy(position);
     content!.add(sphere);
-    labelGroup!.add(labelSprite(point.id, position.clone().add(new THREE.Vector3(0.06, 0.08, 0)), 0.12));
+    if (spec.labels !== false) {
+      labelGroup!.add(labelSprite(point.id, position.clone().add(new THREE.Vector3(0.06, 0.08, 0)), 0.12));
+    }
   }
   const auxiliary = Array.isArray(spec.auxiliary) ? spec.auxiliary : [];
   for (const raw of auxiliary) {

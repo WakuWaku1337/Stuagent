@@ -381,7 +381,7 @@ export function deleteVisualization(id: string): boolean {
   return db.prepare('DELETE FROM visualizations WHERE visualization_id = ?').run(id).changes > 0;
 }
 
-export interface UnifiedVisualization extends Visualization {
+export interface UnifiedVisualization extends Omit<Visualization, 'type'> {
   type: VisualizationType | 'legacy-html';
   kind: 'preset' | 'generated' | 'legacy';
   html_url?: string;

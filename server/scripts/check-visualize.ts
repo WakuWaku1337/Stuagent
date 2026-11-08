@@ -14,6 +14,8 @@ const {
   listVisualizations,
 } = await import('../src/learning/visualize.ts');
 const { createVisualizeTool } = await import('../src/learning/visualize-engine.ts');
+const { generateVisualization } = await import('../src/learning/visualize-engine.ts');
+const { modelVisualization } = await import('../src/learning/visualize-modeler.ts');
 const { compileExpression } = await import('../../web/src/utils/expression.ts');
 
 let failures = 0;
@@ -86,8 +88,74 @@ try {
   const tool = createVisualizeTool();
   report(tool.name === 'visualize_generate', 'agent tool registered');
 
+  const functionModel = modelVisualization('画出函数 y=x^2-4x+3 的图像', '数学');
+  const functionSpec = functionModel?.spec as Record<string, unknown> | undefined;
+  const modeledFunctions = (functionSpec?.functions ?? []) as { expression: string; label: string }[];
+  report(
+    functionModel?.type === 'function2d' &&
+      modeledFunctions[0]?.expression === 'x^2-4*x+3' &&
+      (functionSpec?.range as number[]).join(',') === '-2,6',
+    'model function from actual expression',
+    modeledFunctions[0]?.label,
+  );
+
+  const intersectionModel = modelVisualization('二次函数 y=2x+1 与 y=x^2 的交点', '数学');
+  const relations = (intersectionModel?.spec.relations ?? []) as { solve: string }[];
+  report(
+    ((intersectionModel?.spec.functions ?? []) as unknown[]).length === 2 &&
+      relations[0]?.solve === '2*x+1=x^2',
+    'model two functions and intersection',
+    relations[0]?.solve,
+  );
+
+  const cubeModel = modelVisualization('正方体 ABCD-A1B1C1D1 中，E 为 BB1 的中点，过 A、C、E 作截面，棱长为 2', '数学');
+  const cubePoints = (cubeModel?.spec.points ?? []) as { id: string; coord: number[] }[];
+  const cubeAux = (cubeModel?.spec.auxiliary ?? []) as { kind: string; points: string[] }[];
+  report(
+    cubeModel?.type === 'geometry3d' &&
+      cubePoints.find((point) => point.id === 'E')?.coord.join(',') === '2,0,1' &&
+      cubeAux.some((item) => item.kind === 'plane' && item.points.join(',') === 'A,C,E'),
+    'model cube midpoint and section from actual points',
+  );
+
+  const feedModel = modelVisualization('打印机进纸时，滚轮压住第1张纸，摩擦片压住最下层纸，分析层间摩擦力', '物理');
+  const feedText = JSON.stringify(feedModel?.spec ?? {});
+  report(
+    feedModel?.type === 'physics' && feedText.includes('滚轮') && feedText.includes('摩擦片') && feedText.includes('层间摩擦'),
+    'model printer feed friction scenario',
+  );
+
+  const moleculeModel = modelVisualization('水分子 H2O 的键角', '化学');
+  report(
+    moleculeModel?.type === 'molecule' &&
+      String(moleculeModel.spec.data).startsWith('3\n') &&
+      String(moleculeModel.spec.data).includes('O 0 0 0'),
+    'model molecule from formula',
+  );
+
+  const planeModel = modelVisualization('直角三角形两直角边分别为 3 和 4，求斜边', '数学');
+  const planeText = JSON.stringify(planeModel?.spec ?? {});
+  report(
+    planeModel?.type === 'diagram' && planeText.includes('斜边 5') && planeText.includes('90°'),
+    'model right triangle from actual side lengths',
+  );
+
+  report(modelVisualization('今天天气不错') === null, 'modeler rejects unrelated question');
+
+  const generated = await generateVisualization({ question: '斜面上质量 2kg 的物体，倾角 30°，摩擦因数 0.2' });
+  report(
+    generated?.matched === 'modeled' &&
+      generated.visualization.source === 'modeler' &&
+      generated.visualization.type === 'physics',
+    'generate uses local modeler without LLM',
+    generated?.basis,
+  );
+
   report(deleteVisualization(functionViz.visualization_id), 'delete visualization');
-  report(listVisualizations().length === 1, 'list after delete');
+  report(
+    !listVisualizations().some((item) => item.visualization_id === functionViz.visualization_id),
+    'list after delete',
+  );
 
   console.log(failures === 0 ? 'ALL PASS' : `---\n${failures} FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;

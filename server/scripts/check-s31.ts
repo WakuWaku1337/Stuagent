@@ -6,7 +6,6 @@ import { loadSkills } from '@earendil-works/pi-coding-agent';
 
 const dataDir = await mkdtemp(join(tmpdir(), 'edupi-s31-'));
 process.env.EDU_DATA_DIR = dataDir;
-process.env.COURSEWARE_FORCE_TEMPLATE = '1';
 
 const { db } = await import('../src/store.ts');
 const { writeMemory, deleteMemory } = await import('../src/learning/memory.ts');
@@ -62,19 +61,19 @@ try {
 
   const generated = await generateVisualization({ question: '正方体截面', subject: '数学' });
   report(
-    generated?.matched === 'preset' && generated.visualization.type === 'geometry3d',
-    'unified generate returns preset object',
+    generated?.matched === 'modeled' && generated.visualization.type === 'geometry3d',
+    'unified generate models cube locally',
     generated?.matched,
   );
-  const aux = (generated?.visualization.spec.auxiliary ?? []) as unknown[];
-  report(aux.length === 2, 'preset carries auxiliary elements', `${aux.length}`);
+  const points = (generated?.visualization.spec.points ?? []) as unknown[];
+  report(points.length === 8, 'modeled cube has 8 points', `${points.length}`);
 
   const id = generated!.visualization.visualization_id;
   report(
-    listUnifiedVisualizations().some((item) => item.visualization_id === id && item.kind === 'preset'),
-    'unified list marks preset kind',
+    listUnifiedVisualizations().some((item) => item.visualization_id === id && item.kind === 'generated'),
+    'unified list marks modeled kind',
   );
-  report(getUnifiedVisualization(id)?.kind === 'preset', 'unified get returns preset kind');
+  report(getUnifiedVisualization(id)?.kind === 'generated', 'unified get returns modeled kind');
 
   let rejected = false;
   try {
@@ -87,7 +86,7 @@ try {
   }
   report(rejected, 'spec validation rejects unknown auxiliary kind');
 
-  report(deleteUnifiedVisualization(id), 'unified delete removes preset instance');
+  report(deleteUnifiedVisualization(id), 'unified delete removes modeled instance');
   report(getUnifiedVisualization(id) === undefined, 'deleted visualization gone');
 
   const memory = writeMemory('S31 存储镜像测试：函数定义域优先。', 'test');

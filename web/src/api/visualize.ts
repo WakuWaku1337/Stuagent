@@ -55,7 +55,7 @@ export function deleteVisualization(id: string): Promise<{ deleted: string }> {
 export function generateVisualization(input: {
   question: string;
   subject?: string;
-}): Promise<{ visualization: Visualization | null; matched: string }> {
+}): Promise<{ visualization: Visualization | null; matched: 'modeled' | 'preset' | 'none'; basis?: string }> {
   return request('/api/visualize/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

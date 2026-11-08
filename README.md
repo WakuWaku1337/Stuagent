@@ -89,7 +89,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET | /api/reviews · /api/reviews/:id · /api/reviews/compare | 考试记录 / 详情 / 趋势对比 |
 | POST | /api/reviews/:id/analyze | 生成复盘报告（判分、错因、BKT、错题联动） |
 | GET/POST | /api/visualize | 统一可视化列表（含旧版课件）/ 按 spec 生成 |
-| POST | /api/visualize/generate | 按题目生成：预置课件库优先，未命中由模型判定类型与 spec |
+| POST | /api/visualize/generate | 按题目内容本地解析建模（函数/方程/几何/分子/物理场景），不调用对话模型 |
 | GET/DELETE | /api/visualize/:id | 统一可视化对象 / 删除（课件与生成结果同一入口） |
 | GET | /api/courseware/:id | 旧版单文件课件 HTML（CSP 沙箱，只读兼容） |
 | GET | /api/settings/providers | Provider 与模型目录 |
@@ -114,7 +114,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 
 MCP：支持 stdio 本地进程与 HTTP/SSE 远程服务，连接测试后自动发现工具；工具以 `mcp__服务__工具` 注册给 Tutor/Quizzer/Analyst/Solver，可逐项授权。env 与 headers 加密保存，接口只返回键名。
 
-统一可视化：交互课件与自动可视化已合并为一个入口。提问或拍照后先匹配预置课件库（13 条 spec，命中即复用同一条记录、不消耗模型调用），未命中才由模型判定学科与类型输出 spec，失败回退预置。渲染器共用：立体几何/三维函数/地形/细胞结构用 Three.js，函数与圆锥曲线用 function-plot（多函数叠加、交点与零点标记、不等式区域填充、参数滑块、图例显隐），化学分子用 3Dmol，受力/电路/示意用内联 SVG。工具条提供旋转缩放、重置视角、辅助线/截面显隐、标注、自动旋转、全屏与截图；辅助元素附带添加理由。回答内嵌可视化，并把 `visualization_id` 落库，重开会话仍然可见。旧的单文件 HTML 课件保留为只读项（沙箱 iframe + CSP），不再生成新的 HTML 课件。长期记忆镜像到 `server/data/memory/*.md`。
+统一可视化：交互课件与自动可视化已合并为一个入口。生成可视化时由后端直接解析题目内容，不调用对话模型：函数表达式与交点/不等式/区间/滑块、圆锥曲线方程、正方体/棱锥的命名点/棱长/中点/截面、三角形/矩形/圆等平面图形、常见分子式、打印机进纸/斜面/电路/透镜/细胞等场景分别走确定性建模；解析不到具体结构时不出图，纯主题问题才回退预置模板。渲染器共用：立体几何/三维函数/地形/细胞结构用 Three.js，函数与圆锥曲线用 function-plot（多函数叠加、交点与零点标记、不等式区域填充、参数滑块、图例显隐），化学分子用 3Dmol，受力/电路/示意用内联 SVG。工具条提供旋转缩放、重置视角、辅助线/截面显隐、标注、自动旋转、全屏与截图；辅助元素附带添加理由。回答内嵌可视化，并把 `visualization_id` 落库，重开会话仍然可见。旧的单文件 HTML 课件保留为只读项（沙箱 iframe + CSP），不再生成新的 HTML 课件。长期记忆镜像到 `server/data/memory/*.md`。
 
 解题视频：按设计 §3.2 不在本期自研渲染管线；如需视频，可通过 `/mcp` 接入外部解题视频 MCP 服务。
 
@@ -142,7 +142,7 @@ node --import jiti/register scripts/check-ocr.ts    # 扫描件 OCR（判定→�
 node --import jiti/register scripts/check-difficulty.ts # 掌握度 → 出题难度校准
 node --import jiti/register scripts/check-mcp.ts    # MCP 服务接入、工具发现/授权/调用与配置同步
 node --import jiti/register scripts/check-visualize.ts # 可视化 spec 校验与表达式求值
-node --import jiti/register scripts/check-s31.ts    # 统一可视化引擎（预置匹配、spec 校验、统一列表/删除）、SKILL.md 与记忆镜像
+node --import jiti/register scripts/check-s31.ts    # 统一可视化引擎（题目确定性建模、spec 校验、统一列表/删除）、SKILL.md 与记忆镜像
 ```
 
 ## 生产构建

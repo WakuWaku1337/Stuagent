@@ -112,7 +112,7 @@ export default createRouter({
       path: '/visualize',
       name: 'visualize',
       component: VisualizeView,
-      meta: { title: '统一可视化', subtitle: '交互课件与自动可视化合并：预置库优先，共用渲染器' },
+      meta: { title: '统一可视化', subtitle: '按题目内容本地解析建模，不调用对话模型生成图形' },
     },
   ],
 });
