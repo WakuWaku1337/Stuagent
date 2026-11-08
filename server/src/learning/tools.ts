@@ -6,7 +6,7 @@ import { updateMastery, generateQuiz } from './quiz.ts';
 import { addWrongRecord, listWrongRecords } from './wrongbook.ts';
 import { listMastery } from './mastery.ts';
 import { createPlan } from './plan.ts';
-import { createVisualizeTool } from './visualize.ts';
+import { createVisualizeTool } from './visualize-engine.ts';
 import { db } from '../store.ts';
 
 function saveManualQuestion(input: {

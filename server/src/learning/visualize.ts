@@ -1,9 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Type, type Static } from 'typebox';
-import { defineTool } from '@earendil-works/pi-coding-agent';
 import { db } from '../store.ts';
 import { deleteLegacyCourseware, getLegacyCourseware, listLegacyCourseware } from '../courseware/legacy.ts';
-import { matchPreset } from './visualize-presets.ts';
 
 export const VISUALIZATION_TYPES = [
   'geometry3d',
@@ -436,60 +433,3 @@ export function getUnifiedVisualization(id: string): UnifiedVisualization | unde
 export function deleteUnifiedVisualization(id: string): boolean {
   return deleteVisualization(id) || deleteLegacyCourseware(id);
 }
-
-const vizTypeSchema = Type.Union(VISUALIZATION_TYPES.map((value) => Type.Literal(value)));
-
-export function createVisualizeTool() {
-  return defineTool({
-    name: 'visualize_generate',
-    label: '生成统一可视化',
-    description:
-      '统一可视化入口（交互课件与自动可视化合并）。给 question 时优先匹配预置课件库，命中直接返回；未命中或需要精确控制时给 type+title+spec。geometry3d 需要 points/edges，可加 auxiliary 辅助线/截面；function2d 可用 functions 多函数叠加 + relations/regions/sliders；molecule 用 format+data。返回打开链接。',
-    parameters: Type.Object({
-      type: Type.Optional(vizTypeSchema),
-      title: Type.Optional(Type.String({ description: '可视化标题' })),
-      spec: Type.Optional(Type.Any({ description: '结构化可视化规格' })),
-      question: Type.Optional(Type.String({ description: '题目原文；提供时优先匹配预置课件库' })),
-      subject: Type.Optional(Type.String({ description: '学科，如 数学 / 化学 / 物理' })),
-    }),
-    async execute(_id, params) {
-      let visualization: Visualization;
-      if (params.question && !params.spec) {
-        const preset = matchPreset(params.question, params.subject);
-        if (!preset) {
-          throw new VisualizationError(
-            'VIZ_PRESET_MISS',
-            '预置库未命中；请改传 type+title+spec 自行给出规格',
-          );
-        }
-        visualization = createVisualization({
-          type: preset.type,
-          title: preset.title,
-          spec: preset.spec,
-          source: 'preset',
-        });
-      } else {
-        if (!params.type || !params.spec) {
-          throw new VisualizationError('VIZ_SPEC_REQUIRED', '需要 question 或 type+spec');
-        }
-        visualization = createVisualization({
-          type: params.type as VisualizationType,
-          title: params.title ?? '',
-          spec: params.spec,
-          source: 'agent',
-        });
-      }
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `已生成可视化「${visualization.title}」：[打开可视化](/visualize?id=${visualization.visualization_id})`,
-          },
-        ],
-        details: visualization,
-      };
-    },
-  });
-}
-
-export type VisualizeToolParams = Static<typeof vizTypeSchema>;

@@ -13,7 +13,9 @@
 - 数据变更：`messages` 新增 `visualization_id` 列；预置可视化改用固定 id；清理了本次验证产生的 18 条重复预置记录（用户手工/生成/旧版课件未动）
 - 新增依赖：web workspace `three@0.187`、`function-plot@1.26`、`3dmol@2.5.5`；渲染器打进 `VizRenderer` 独立 chunk（1.45 MB / gzip 391 KB），随路由懒加载
 - Docker 修复（2026-11-08）：容器 SQLite 原放在 Windows bind mount（9p），`node:sqlite` 报 `disk I/O error` 无限重启；改为命名卷 `docker_app_data:/app/data`（`EDU_DATA_DIR=/app/data`），uploads 仍 bind mount。旧库先 `PRAGMA wal_checkpoint(TRUNCATE)` 再灌入卷；宿主端口支持 `APP_PORT` 覆盖（与 dev 的 3000 共存时用 3100）。实测 restarts=0、读写正常、重启后数据保留
-- 首字体验修复（2026-11-08）：实测一次 chat 调用 100s（10.9k prompt、3.3k reasoning、6.5k completion），思考阶段没有 text_delta，界面长时间空白；另有首次请求撞上服务重启/主动中断时前端拿不到回复。修复：Pi 思考阶段下发 `thinking` 心跳（800ms 节流）；空回复时显示「模型正在思考」；收到 `done` 立即解除发送禁用，不再等自动可视化后处理；自动可视化的模型判定加 8s 超时（原来最长 120s 会挂住流）
+- 首字体验修复（2026-11-08）：实测一次 chat 调用 100s（10.9k prompt、3.3k reasoning、6.5k completion），思考阶段没有 text_delta，界面长时间空白；另有首次请求撞上服务重启/主动中断时前端拿不到回复。修复：Pi 思考阶段下发 `thinking` 心跳（800ms 节流）；空回复时显示「模型正在思考」；收到 `done` 立即解除发送禁用，不再等自动可视化后处理；自动可视化的模型判定加超时（先 8s，后因判定常被截断调到 20s）
+- 绘图链路修复（2026-11-08）：智能体改为手绘 ASCII 的根因是 `visualize_generate` 只收对象 spec，模型传 JSON 字符串就报「spec 必须是对象」。工具移入 `visualize-engine.ts`：spec 兼容对象/JSON 字符串，只传 question 也走「预置 → 模型判定 → 失败不出图」（不再硬塞无关预置图）；判定 prompt 明确 `|x|` 写 `abs(x)`、分段合并为单式、要求画图时必须出图；渲染端关系式 `f=g` 按图例标签解析，标记计算失败不再拖垮整张图
+- 开发体验修复（2026-11-08）：`node --watch` 对 jiti 加载的模块不总是生效（改引擎代码不重启），server dev 脚本改为 `--watch-path=src`；同时清理了残留的孤儿 dev 进程（会占着 3000 导致新实例起不来、ASR/TTS 校验误报）
 
 历史：阶段 J · S31 3D 课件与机制收尾已完成（2026-11-07）
 - 课件生成支持 2D/3D：立体几何、空间结构、分子等主题要求 canvas 3D 投影；失败回退内置 3D 模板（拖拽旋转、缩放、自动旋转、顶点/棱/面）

@@ -171,7 +171,7 @@ async function generate() {
   try {
     const result = await generateVisualization({ question: text, subject: subject.value });
     if (!result.visualization) {
-      ElMessage.info('模型判断该题不需要可视化');
+      ElMessage.info('未生成可视化（判定不需要作图或模型暂不可用）');
       return;
     }
     items.value = [result.visualization, ...items.value];

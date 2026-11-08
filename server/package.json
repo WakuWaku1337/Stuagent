@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --import jiti/register src/index.ts",
+    "dev": "node --watch --watch-path=src --import jiti/register src/index.ts",
     "start": "node --import jiti/register src/index.ts",
     "asr:model": "node --import jiti/register scripts/fetch-asr-model.ts"
   },

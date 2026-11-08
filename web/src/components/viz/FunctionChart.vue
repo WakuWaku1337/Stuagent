@@ -85,11 +85,24 @@ function scanRoots(fn: (x: number) => number, [min, max]: [number, number]): num
   return roots;
 }
 
-function regionDatum(where: string, fill: string, range: [number, number], scope: Record<string, number>) {
+function resolveSide(side: string, items: FnItem[]): string {
+  const name = side.trim();
+  if (/^[a-zA-Z]$/.test(name)) {
+    const lower = name.toLowerCase();
+    const index = items.findIndex((item) => {
+      const label = item.label.trim().toLowerCase();
+      return label === lower || label.startsWith(`${lower}(`);
+    });
+    if (index >= 0) return items[index].expression;
+  }
+  return name;
+}
+
+function regionDatum(where: string, fill: string, range: [number, number], scope: Record<string, number>, items: FnItem[]) {
   const match = where.match(/^(.+?)(<=|>=|<|>)(.+)$/);
   if (!match) return null;
-  const left = compileExpression(match[1].trim());
-  const right = compileExpression(match[3].trim());
+  const left = compileExpression(resolveSide(match[1], items));
+  const right = compileExpression(resolveSide(match[3], items));
   const operator = match[2];
   const holds = (x: number) => {
     const a = left(x);
@@ -153,7 +166,7 @@ function buildData() {
 
   for (const raw of Array.isArray(spec.regions) ? spec.regions : []) {
     const region = (raw ?? {}) as Record<string, unknown>;
-    const datum = regionDatum(String(region.where ?? ''), String(region.fill ?? 'rgba(64,158,255,0.2)'), range, scope);
+    const datum = regionDatum(String(region.where ?? ''), String(region.fill ?? 'rgba(64,158,255,0.2)'), range, scope, items);
     if (datum) data.push(datum);
   }
 
@@ -171,16 +184,25 @@ function buildData() {
     const relation = (raw ?? {}) as Record<string, unknown>;
     const solve = String(relation.solve ?? '');
     const sides = solve.split('=');
-    if (sides.length === 2) {
-      const left = compileExpression(sides[0].trim());
-      const right = compileExpression(sides[1].trim());
+    if (sides.length !== 2) continue;
+    try {
+      const leftExpr = resolveSide(sides[0], items);
+      const rightExpr = resolveSide(sides[1], items);
+      const left = compileExpression(leftExpr);
+      const right = compileExpression(rightExpr);
       for (const x of scanRoots((value) => left(value) - right(value), range)) markers.push([x, left(x)]);
+    } catch {
+      // 关系式不是关于 x 的表达式（如未解析出函数名）时跳过标记，不影响曲线
     }
   }
   items.forEach((item, index) => {
     if (hidden[index] || props.visualization.type === 'conic') return;
-    const fn = compileExpression(item.expression);
-    for (const x of scanRoots(fn, range)) markers.push([x, 0]);
+    try {
+      const fn = compileExpression(item.expression);
+      for (const x of scanRoots(fn, range)) markers.push([x, 0]);
+    } catch {
+      // 该函数不可数值求值时跳过零点标记
+    }
   });
   if (markers.length) {
     data.push({ fnType: 'points', sampler: 'builtIn', graphType: 'scatter', points: markers, color: '#15202b', attr: { r: 3.5, fill: '#15202b' } });

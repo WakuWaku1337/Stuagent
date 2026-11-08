@@ -1,5 +1,7 @@
+import { Type } from 'typebox';
+import { defineTool } from '@earendil-works/pi-coding-agent';
 import { chatJson } from './llm.ts';
-import { matchPreset, VIZ_PRESETS, type VizPreset } from './visualize-presets.ts';
+import { matchPreset, type VizPreset } from './visualize-presets.ts';
 import {
   VISUALIZATION_TYPES,
   VisualizationError,
@@ -27,7 +29,8 @@ spec 规则：
 - molecule：format:"xyz"|"pdb"|"sdf"，data 为结构文本，style:"stick"|"sphere"。
 - biology：parts[{id,label,coord,radius,color}]。
 - physics/diagram：elements[{kind:"rect"|"arrow"|"text"|"line"|"circle",x,y,w,h,r,from:[x,y],to:[x,y],label,text,color,rotate}]，画布坐标 0~720 x 0~420。
-表达式只用 + - * / ^ 与 sin/cos/tan/sqrt/log/ln/exp/abs，变量 x（二元加 y），禁止 eval 与任何代码。`;
+表达式只用 + - * / ^ 与 sin/cos/tan/sqrt/log/ln/exp/abs，变量 x（二元加 y），禁止 eval 与任何代码。|x| 写成 abs(x)；分段函数尽量合并成单式（例如 3x|x| 写作 3*x*abs(x)，符号函数可用 x/abs(x)）。
+学生明确要求画图、看图像、要课件时，visualize 必须为 true，不要以文字替代作图。`;
 
 export interface GenerateResult {
   visualization: Visualization;
@@ -44,10 +47,6 @@ function createFromPreset(preset: VizPreset, source: string): Visualization {
     visualizationId: `preset:${preset.id}`,
   });
   return { ...visualization, kind: 'preset' } as Visualization;
-}
-
-function subjectFallback(subject?: string): VizPreset | undefined {
-  return VIZ_PRESETS.find((preset) => preset.subject === (subject ?? '数学')) ?? VIZ_PRESETS[0];
 }
 
 export async function generateVisualization(input: {
@@ -76,7 +75,7 @@ export async function generateVisualization(input: {
           { role: 'system', content: JUDGE_PROMPT },
           { role: 'user', content: `题目：${question}${input.subject ? `（${input.subject}）` : ''}` },
         ],
-        { scenario: 'courseware', subject: input.subject, timeoutMs: 8000 },
+        { scenario: 'courseware', subject: input.subject, timeoutMs: 20000 },
       );
       if (decision.visualize === false) return null;
       const type = decision.type as VisualizationType;
@@ -92,10 +91,85 @@ export async function generateVisualization(input: {
       return { visualization: { ...visualization, kind: 'generated' } as Visualization, matched: 'llm' };
     } catch (error) {
       if (error instanceof VisualizationError && error.code === 'VIZ_TYPE_INVALID') throw error;
-      // 模型不可用或 spec 不合法时回退预置库，保证入口始终有产出
+      // 判定失败不硬凑：宁可不出图，也不要给一张与题目无关的预置图
+      return null;
     }
   }
-  const fallback = subjectFallback(input.subject);
-  if (!fallback) throw new VisualizationError('VIZ_GENERATE_FAILED', '没有可用的预置可视化', 502);
-  return { visualization: createFromPreset(fallback, 'fallback'), matched: 'fallback', preset_id: fallback.id };
+  return null;
+}
+
+const vizTypeSchema = Type.Union(VISUALIZATION_TYPES.map((value) => Type.Literal(value)));
+
+function parseSpec(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === 'string' && raw.trim()) {
+    const text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function createVisualizeTool() {
+  return defineTool({
+    name: 'visualize_generate',
+    label: '生成统一可视化',
+    description:
+      '画图与交互课件的唯一入口。优先只传 question 与 subject：先匹配预置课件库，未命中由模型生成 spec，仍失败回退预置，保证有图。需要精确控制时再传 type+spec（spec 可传对象或 JSON 字符串）。function2d 的 expression 支持 abs（|x| 写成 abs(x)），分段函数请合并为单式（3x|x| → 3*x*abs(x)）。不要在回答里手绘 ASCII 图，直接调用本工具。',
+    parameters: Type.Object({
+      question: Type.Optional(Type.String({ description: '题目原文；只传它也能出图' })),
+      subject: Type.Optional(Type.String({ description: '学科，如 数学 / 化学 / 物理' })),
+      type: Type.Optional(vizTypeSchema),
+      title: Type.Optional(Type.String({ description: '可视化标题' })),
+      spec: Type.Optional(Type.Any({ description: '结构化可视化规格（对象或 JSON 字符串）' })),
+    }),
+    async execute(_id, params) {
+      const spec = parseSpec(params.spec);
+      let visualization: Visualization | null = null;
+
+      if (params.type && spec) {
+        try {
+          visualization = createVisualization({
+            type: params.type as VisualizationType,
+            title: params.title ?? '',
+            spec,
+            source: 'agent',
+          });
+        } catch (error) {
+          if (!params.question) throw error;
+        }
+      }
+
+      if (!visualization && params.question) {
+        const result = await generateVisualization({ question: params.question, subject: params.subject });
+        if (!result) {
+          throw new VisualizationError('VIZ_SKIPPED', '未生成可视化（判定无需作图或模型不可用）；如确需作图，请传 type+spec');
+        }
+        visualization = result.visualization;
+      }
+
+      if (!visualization) {
+        throw new VisualizationError(
+          params.spec !== undefined && !spec ? 'VIZ_SPEC_INVALID' : 'VIZ_SPEC_REQUIRED',
+          params.spec !== undefined && !spec
+            ? 'spec 必须是对象或 JSON 字符串'
+            : '需要 question，或 type+title+spec',
+        );
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `已生成可视化「${visualization.title}」：[打开可视化](/visualize?id=${visualization.visualization_id})`,
+          },
+        ],
+        details: visualization,
+      };
+    },
+  });
 }

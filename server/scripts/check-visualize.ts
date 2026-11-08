@@ -9,11 +9,11 @@ const { db } = await import('../src/store.ts');
 const {
   VisualizationError,
   createVisualization,
-  createVisualizeTool,
   deleteVisualization,
   getVisualization,
   listVisualizations,
 } = await import('../src/learning/visualize.ts');
+const { createVisualizeTool } = await import('../src/learning/visualize-engine.ts');
 const { compileExpression } = await import('../../web/src/utils/expression.ts');
 
 let failures = 0;
