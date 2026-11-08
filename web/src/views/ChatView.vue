@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Clock, Camera, Headset, Loading, Microphone, Picture, Promotion, Refresh, VideoPause, EditPen } from '@element-plus/icons-vue';
+import { ArrowRight, Clock, Camera, Headset, Loading, Microphone, Picture, Promotion, Refresh, VideoPause, EditPen } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useChatStore, type ChatMessage } from '../stores/chat';
 import MarkdownView from '../components/MarkdownView.vue';
@@ -129,6 +129,12 @@ function formatSeconds(value: number): string {
 
 function messageKey(message: ChatMessage, index: number): string {
   return message.message_id ?? `local-${index}`;
+}
+
+const expandedCites = ref<Record<string, boolean>>({});
+
+function toggleCites(key: string) {
+  expandedCites.value[key] = !expandedCites.value[key];
 }
 
 function appendTranscript(text: string) {
@@ -564,28 +570,33 @@ onMounted(async () => {
               </details>
             </template>
 
-            <span
-              v-if="chat.streaming && m.role === 'assistant' && !m.content"
-              class="typing"
-              aria-label="正在输入"
-            >
-              <i /><i /><i />
-            </span>
-
             <div v-if="m.citations?.length" class="citations">
-              <p class="cite-label">参考教材</p>
-              <div v-for="c in m.citations" :key="c.chunk_id" class="cite">
-                <div class="cite-head">
-                  <span class="cite-index numeric">[{{ c.index }}]</span>
-                  <span class="cite-source">《{{ c.source_name }}》</span>
-                  <span class="cite-meta">
-                    {{ c.chapter || '未分章' }}<template v-if="c.page"> · 第 {{ c.page }} 页</template>
-                  </span>
-                  <span v-if="c.score" class="cite-score numeric">
-                    {{ Math.min(100, Math.round(c.score * 100)) }}%
-                  </span>
+              <button
+                type="button"
+                class="cite-toggle"
+                :aria-expanded="!!expandedCites[messageKey(m, i)]"
+                @click="toggleCites(messageKey(m, i))"
+              >
+                <el-icon class="cite-toggle-icon" :class="{ open: !!expandedCites[messageKey(m, i)] }">
+                  <ArrowRight />
+                </el-icon>
+                <span>参考资料</span>
+                <span class="cite-count numeric">{{ m.citations.length }}</span>
+              </button>
+              <div v-show="expandedCites[messageKey(m, i)]" class="cite-list">
+                <div v-for="c in m.citations" :key="c.chunk_id" class="cite">
+                  <div class="cite-head">
+                    <span class="cite-index numeric">[{{ c.index }}]</span>
+                    <span class="cite-source">《{{ c.source_name }}》</span>
+                    <span class="cite-meta">
+                      {{ c.chapter || '未分章' }}<template v-if="c.page"> · 第 {{ c.page }} 页</template>
+                    </span>
+                    <span v-if="c.score" class="cite-score numeric">
+                      {{ Math.min(100, Math.round(c.score * 100)) }}%
+                    </span>
+                  </div>
+                  <p class="cite-snippet">{{ c.snippet }}</p>
                 </div>
-                <p class="cite-snippet">{{ c.snippet }}</p>
               </div>
             </div>
 
@@ -1100,10 +1111,50 @@ onMounted(async () => {
   50% { opacity: 1; transform: scale(1); }
 }
 
-.cite-label {
+.cite-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 0;
+  border: 0;
+  background: transparent;
   font-size: 11.5px;
   color: var(--faint);
-  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.cite-toggle:hover {
+  color: var(--accent);
+}
+
+.cite-toggle:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.cite-toggle-icon {
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+
+.cite-toggle-icon.open {
+  transform: rotate(90deg);
+}
+
+.cite-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--paper, #eef2f5);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.cite-list {
+  margin-top: 8px;
 }
 
 .cite {
@@ -1173,39 +1224,6 @@ onMounted(async () => {
 .truncated-note {
   font-size: 11px;
   color: var(--warning);
-}
-
-.typing {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px 0;
-}
-
-.typing i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--faint);
-  animation: blink 1.2s infinite ease-in-out;
-}
-
-.typing i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.typing i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-@keyframes blink {
-  0%,
-  80%,
-  100% {
-    opacity: 0.3;
-  }
-  40% {
-    opacity: 1;
-  }
 }
 
 .chat-error {

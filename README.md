@@ -96,7 +96,7 @@ npm run dev            # 并行启动 server(3000) 与 web(5173)
 | GET | /api/usage/summary · /api/usage/daily · /api/usage/cost | 用量汇总 / 每日明细 / 成本 |
 | GET | /api/usage/export?format=csv|json | 导出用量明细 |
 
-页面：`/` 首页、`/plan` 学习计划（目标拆解、每日任务勾选、调整与归档）、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、语音输入与朗读、引用卡片、KaTeX、角色徽标、截断续写）、`/documents` 资料库、`/quiz` 出题与每日练习、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化（交互课件与自动可视化合并，`/courseware` 自动跳转）、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展。
+页面：`/` 首页、`/plan` 学习计划（目标拆解、每日任务勾选、调整与归档）、`/chat` 对话（历史会话侧栏、重开续聊、拍照/上传图片问答、语音输入与朗读、参考资料折叠、KaTeX、角色徽标、截断续写）、`/documents` 资料库、`/quiz` 出题与每日练习、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模考、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化（交互课件与自动可视化合并，`/courseware` 自动跳转）、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展。
 
 技术栈前端：Vue3 + Vite + Element Plus + ECharts（按需加载），统一水墨蓝主题与移动端抽屉导航。
 
