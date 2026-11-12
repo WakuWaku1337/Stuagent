@@ -4,6 +4,7 @@ import {
   authEnabled,
   bootstrapAdmin,
   bootstrapAllowed,
+  bootstrapLocalOnly,
   changePassword,
   clearLoginFailures,
   countUsers,
@@ -24,6 +25,7 @@ import {
 } from '../auth/service.ts';
 import {
   clearSessionCookie,
+  bootstrapSourceAllowed,
   currentSession,
   requestIp,
   requestSessionToken,
@@ -35,9 +37,10 @@ const auth = new Hono();
 
 function errorResponse(c: Context, error: unknown) {
   if (error instanceof AuthError) {
-    return c.json({ code: error.code, error: error.message }, error.status as 400);
+    return c.json({ code: error.code, error: error.message, message: error.message }, error.status as 400);
   }
-  return c.json({ code: 'AUTH_ERROR', error: error instanceof Error ? error.message : String(error) }, 500);
+  const message = error instanceof Error ? error.message : String(error);
+  return c.json({ code: 'AUTH_ERROR', error: message, message }, 500);
 }
 
 auth.get('/bootstrap', (c) =>
@@ -46,6 +49,7 @@ auth.get('/bootstrap', (c) =>
     initialized: countUsers() > 0,
     registrationOpen: registrationOpen(),
     bootstrapAllowed: bootstrapAllowed(),
+    bootstrapLocalOnly: bootstrapLocalOnly(),
   }),
 );
 
@@ -53,8 +57,17 @@ auth.post('/register', async (c) => {
   if (!authEnabled()) return c.json({ code: 'AUTH_DISABLED', error: '认证已关闭' }, 400);
   const ip = requestIp(c);
   const userAgent = requestUserAgent(c);
-  if (registrationRateLimited(ip)) {
-    return c.json({ code: 'RATE_LIMITED', error: '注册过于频繁，请稍后再试' }, 429);
+  const rate = registrationRateLimited(ip);
+  if (rate.limited) {
+    c.header('Retry-After', String(rate.retryAfterSec));
+    return c.json(
+      {
+        code: 'RATE_LIMITED',
+        error: '注册过于频繁，请稍后再试',
+        message: '注册过于频繁，请稍后再试',
+      },
+      429,
+    );
   }
   const body = await c.req
     .json<{
@@ -71,12 +84,33 @@ auth.post('/register', async (c) => {
     const initialized = countUsers() > 0;
     if (!initialized && !bootstrapAllowed()) {
       return c.json(
-        { code: 'NOT_INITIALIZED', error: '实例尚未初始化，请先运行 npm run auth:bootstrap' },
+        {
+          code: 'NOT_INITIALIZED',
+          error: '实例尚未初始化，请先运行 npm run auth:bootstrap',
+          message: '实例尚未初始化，请先运行 npm run auth:bootstrap',
+        },
         409,
       );
     }
+    if (!initialized) {
+      const source = bootstrapSourceAllowed(c);
+      if (!source.allowed) {
+        recordAuthEvent(null, 'bootstrap', 'blocked', { reason: source.reason }, { ip, userAgent });
+        return c.json(
+          {
+            code: 'BOOTSTRAP_LOCAL_ONLY',
+            error: source.reason ?? '首个管理员只能在本机创建',
+            message: source.reason ?? '首个管理员只能在本机创建',
+          },
+          403,
+        );
+      }
+    }
     if (initialized && !registrationOpen()) {
-      return c.json({ code: 'REGISTRATION_CLOSED', error: '当前未开放注册' }, 403);
+      return c.json(
+        { code: 'REGISTRATION_CLOSED', error: '当前未开放注册', message: '当前未开放注册' },
+        403,
+      );
     }
 
     const user = initialized
@@ -118,8 +152,13 @@ auth.post('/login', async (c) => {
   const key = loginAttemptKey(ip, body.username);
   const locked = loginLockedFor(key);
   if (locked > 0) {
+    c.header('Retry-After', String(Math.max(1, Math.ceil(locked / 1000))));
     return c.json(
-      { code: 'LOGIN_LOCKED', error: `登录尝试过多，请 ${Math.ceil(locked / 60000)} 分钟后再试` },
+      {
+        code: 'LOGIN_LOCKED',
+        error: `登录尝试过多，请 ${Math.ceil(locked / 60000)} 分钟后再试`,
+        message: `登录尝试过多，请 ${Math.ceil(locked / 60000)} 分钟后再试`,
+      },
       429,
     );
   }

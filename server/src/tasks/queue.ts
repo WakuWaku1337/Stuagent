@@ -4,6 +4,7 @@ import { db } from '../store.ts';
 import { generateQuiz, startSession } from '../learning/quiz.ts';
 import { chat } from '../pi.ts';
 import { currentLearnerId, runWithLearner } from '../learning/context.ts';
+import { TASK_RETRY_MAX } from '../config.ts';
 
 export type TaskType = 'quiz' | 'analysis';
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'timeout' | 'cancelled';
@@ -27,6 +28,7 @@ export const taskEvents = new EventEmitter();
 const TIMEOUT_MS = Number(process.env.TASK_TIMEOUT_MS ?? 180_000);
 let running = false;
 const timeouts = new Map<string, ReturnType<typeof setTimeout>>();
+const controllers = new Map<string, AbortController>();
 
 function row(id: string): TaskRow | undefined {
   return db.prepare('SELECT * FROM tasks WHERE task_id = ?').get(id) as unknown as TaskRow | undefined;
@@ -74,6 +76,10 @@ export function cancelTask(id: string): TaskRow | undefined {
   if (task.status === 'queued') {
     update(id, { status: 'cancelled', finished_at: Date.now() });
     emitTask(id);
+  } else if (task.status === 'running') {
+    controllers.get(id)?.abort();
+    update(id, { status: 'cancelled', finished_at: Date.now() });
+    emitTask(id);
   }
   return getTask(id);
 }
@@ -90,7 +96,7 @@ export function recoverTasks(): void {
   setImmediate(() => void drain());
 }
 
-async function execute(task: TaskRow): Promise<unknown> {
+async function execute(task: TaskRow, signal: AbortSignal): Promise<unknown> {
   const payload = JSON.parse(task.payload) as Record<string, unknown>;
   if (task.type === 'quiz') {
     const questions = await generateQuiz({
@@ -98,6 +104,7 @@ async function execute(task: TaskRow): Promise<unknown> {
       difficulty: payload.difficulty ? String(payload.difficulty) : undefined,
       count: payload.count ? Number(payload.count) : 3,
       subject: payload.subject ? String(payload.subject) : undefined,
+      signal,
     });
     const sessionId = startSession({
       type: 'practice',
@@ -112,7 +119,7 @@ async function execute(task: TaskRow): Promise<unknown> {
       `task-${task.task_id}`,
       String(payload.question ?? '请给我一份当前学习诊断报告'),
       () => {},
-      undefined,
+      signal,
       'analyst',
     );
     return { reply: text };
@@ -133,7 +140,11 @@ async function drain(): Promise<void> {
       update(next.task_id, { status: 'running', started_at: Date.now() });
       emitTask(next.task_id);
 
+      const controller = new AbortController();
+      controllers.set(next.task_id, controller);
       const watchdog = setTimeout(() => {
+        // 真正中止任务，而不是只改状态后让它在后台空跑
+        controller.abort();
         update(next.task_id, { status: 'timeout', error: `超过 ${TIMEOUT_MS}ms 未完成`, finished_at: Date.now() });
         emitTask(next.task_id);
       }, TIMEOUT_MS);
@@ -142,7 +153,7 @@ async function drain(): Promise<void> {
       try {
         const result = await runWithLearner(
           { learnerId: next.learner_id, userId: next.learner_id, role: 'user' },
-          () => execute(next),
+          () => execute(next, controller.signal),
         );
         const current = row(next.task_id);
         if (current?.status === 'running') {
@@ -152,17 +163,32 @@ async function drain(): Promise<void> {
       } catch (e) {
         const current = row(next.task_id);
         if (current?.status === 'running') {
-          update(next.task_id, {
-            status: 'failed',
-            error: e instanceof Error ? e.message : String(e),
-            finished_at: Date.now(),
-          });
-          emitTask(next.task_id);
+          const attempts = current.attempts + 1;
+          const message = e instanceof Error ? e.message : String(e);
+          if (attempts <= TASK_RETRY_MAX) {
+            update(next.task_id, { status: 'queued', attempts, started_at: null, error: message });
+            emitTask(next.task_id);
+            // 重排后立即停掉本轮 watchdog，避免退避期间把 queued 覆盖成 timeout
+            const pending = timeouts.get(next.task_id);
+            if (pending) clearTimeout(pending);
+            timeouts.delete(next.task_id);
+            const backoffMs = Math.min(30_000, 1000 * 2 ** (attempts - 1)) + Math.random() * 300;
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          } else {
+            update(next.task_id, {
+              status: 'failed',
+              attempts,
+              error: message,
+              finished_at: Date.now(),
+            });
+            emitTask(next.task_id);
+          }
         }
       } finally {
         const t = timeouts.get(next.task_id);
         if (t) clearTimeout(t);
         timeouts.delete(next.task_id);
+        controllers.delete(next.task_id);
       }
     }
   } finally {

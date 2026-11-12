@@ -5,6 +5,12 @@ import { getSemanticCache, invalidateRagCache, putSemanticCache } from './cache.
 import { rerank } from './rerank.ts';
 import { invalidateAnswerCache } from '../chat/answer-cache.ts';
 import { currentLearnerId } from '../learning/context.ts';
+import {
+  RAG_CANDIDATE_K,
+  RAG_RECALL_LIMIT,
+  RAG_TOP_K,
+  RERANK_MIN_QUERY_CHARS,
+} from '../config.ts';
 
 export interface Citation {
   index: number;
@@ -66,25 +72,26 @@ export async function searchKnowledge(
   query: string,
   opts: { topK?: number; candidateK?: number; subject?: string; noCache?: boolean } = {},
 ): Promise<RagResult> {
-  const topK = opts.topK ?? 5;
-  const candidateK = opts.candidateK ?? 30;
+  const topK = opts.topK ?? RAG_TOP_K;
+  const candidateK = opts.candidateK ?? RAG_CANDIDATE_K;
   const [dense] = await embedTexts([query]);
   const cached = opts.noCache ? null : getSemanticCache<RagResult>(dense, opts.subject, topK);
   if (cached) return { ...cached, query, cached: true };
-  let recalled = await hybridRecall(query, dense, 50, opts.subject);
+  let recalled = await hybridRecall(query, dense, RAG_RECALL_LIMIT, opts.subject);
   if (recalled.length === 0) {
     const learnerId = currentLearnerId();
     const recent = lastIndexAt.get(learnerId) ?? 0;
     if (Date.now() - recent < 10_000) {
-      // Milvus 新写入的切片可能短暂不可见，刚索引完的问题重试一次
+      // 已实现的降级路径：Milvus 新写入的切片可能短暂不可见，刚索引完的问题重查一次。
+      // 这里是一次有上限的可见性补偿，不再叠加 withRetry，避免与 RAG_RETRY_MAX 形成重复重试。
       await new Promise((resolve) => setTimeout(resolve, 300));
-      recalled = await hybridRecall(query, dense, 50, opts.subject);
+      recalled = await hybridRecall(query, dense, RAG_RECALL_LIMIT, opts.subject);
     }
   }
   if (recalled.length === 0) return { query, citations: [] };
 
   const candidates = recalled.slice(0, candidateK);
-  const rerankMinChars = Number(process.env.RERANK_MIN_QUERY_CHARS ?? 16);
+  const rerankMinChars = RERANK_MIN_QUERY_CHARS;
   let ordered: SearchHit[];
   if (candidates.length <= topK || query.trim().length < rerankMinChars) {
     // 简单短查询直接使用 RRF 粗排，省掉一次 Cross-Encoder 推理
@@ -99,7 +106,8 @@ export async function searchKnowledge(
         .sort((a, b) => b.score - a.score);
       if (ordered.length === 0) ordered = candidates.slice(0, topK);
     } catch {
-      // 精排不可用时退化为 RRF 粗排结果
+      // 已实现的降级路径：精排不可用时退化为 RRF 粗排结果。
+      // rerank 自身的超时/重试由 rag/resilience.ts 负责，这里只保留最终降级，不重复重试。
       ordered = candidates.slice(0, topK);
     }
   }

@@ -1,0 +1,22 @@
+services:
+  edu-agent:
+    container_name: edu-agent
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../server/.env
+    environment:
+      PORT: 3000
+      EDU_DATA_DIR: /app/data
+      OCR_ENGINE: vision
+    volumes:
+      # SQLite 不能放在 Windows bind mount（9p 无可靠文件锁，node:sqlite 报 disk I/O error），用命名卷
+      - app_data:/app/data
+      - ../server/uploads:/app/server/uploads
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  app_data:

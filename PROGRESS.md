@@ -1,10 +1,18 @@
 # 智学 实施进度
 
-当前阶段：S23 性能优化第一批已完成（2026-11-08）；剩余全量压测与独立快模型路由
+当前阶段：文档—代码一致性整改（2026-11-13）已完成 B1 安全修复、B2 契约修复与 B3 文档对齐；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
 
 公开注册：S33 数据隔离完成后已恢复默认开放（`REGISTRATION_OPEN=1`）；如需收紧设置 `REGISTRATION_OPEN=0`
 
 密码策略：注册、改密、管理员重置统一放宽为 6–128 位；README 已按 v0.30 重写（2026-11-08）
+
+## 2026-11-13 · 文档—代码一致性整改（依据《施工方案-文档代码一致性整改.md》v0.1）
+
+- B1 安全与隔离：考试复盘写题库补 `learner_id`（新增 `check-exam-isolation.ts`，ALL PASS）；主对话按 `LLM_KEY_MAX_ATTEMPTS` 截断候选；stdio MCP 只继承最小运行环境；`mcp.json` 不再落解密 env/headers；远程 MCP 只允许 http/https，并新增 `MCP_ALLOWED_HOSTS`。
+- B2 契约：`OCR_ENGINE`（应用侧）与 `DOCLING_OCR_ENGINE`（透传）口径拆分；上传限制统一为单文件 50MB / 单批 50 个 / 单批 200MB（`documents/limits.ts`）；上传错误详情收进 `detail`；`check-config-keys.ts` 扩展为全 `server/src` 扫描（72 登记键 / 79 代码键 / 3 豁免键）；新增 `check-api-docs.ts`。
+- B3 文档：设计文档 5.6、6.3、6.5、6.7、6.10、6.12、6.14、6.15、7.1、7.3 按代码修订；未实现项统一标注【未实现，v0.31】；README 配置表与 API 摘要同步。
+- 数据修复：新增 `repair-exam-question-owner.ts`，默认 dry-run；历史题目归属修复尚未执行 `--apply`。
+- 未实现（明确保留）：复盘多图/导出、MCP 重连/日志/模板、可视化动画、答案语义缓存、历史摘要、工具并行、音频统一入库。
 
 阶段 I · S23 性能优化第一批已完成（2026-11-08）
 - 缓存：新增 SQLite `embedding_cache`、聊天答案缓存 `answer_cache`、检索语义缓存 `rag/cache.ts`；文档索引/删除时失效检索与答案缓存
@@ -62,7 +70,7 @@
 - 方案：Docling 作为扫描件唯一主路径，不再保留整篇自建兜底；`OCR_ENGINE=auto`（默认）走 docling-serve + 低置信/公式密集页视觉增强，`docling` 只用 Docling；旧逐页 OCR、RapidOCR 桥接与 `vision|local` 模式已删除（2026-11-08）
 - 服务：compose 新增 `docling-serve`（profile `docling`，宿主 5001）；`npm run docling:up/down` 启停，`npm run docling:models` 下载公式模型到命名卷 `docling_models`。CPU 镜像压缩 2.1GB、本地展开 7.57GB，基础模型已内置；本机直连 GHCR/Quay 过慢，`docker/.env` 用南京大学镜像 `ghcr.nju.edu.cn/docling-project/docling-serve-cpu:latest`，可用官方的 `ghcr.io/docling-project/docling-serve-cpu:latest` 覆盖
 - 适配：`server/src/documents/docling.ts` 提交 `/v1/convert/file/async`、轮询 `/v1/status/poll`、读取 `/v1/result`；请求 md+json、`md_page_break_placeholder`、`do_ocr`；按占位符切逐页 Markdown，逐页 confidence 取 `ocr_score`（layout 分低不再误判待校对）；成功后结果缓存 `uploads/ocr/<id>/docling.json`，重试复用；转换中途重启会重新提交
-- 增强：OCR 置信度 <0.8 或单页未解码公式 ≥10 处的页面走视觉模型单页增强，engine 记为 `docling+vision`；视觉失败保留 Docling 结果。`OCR_VISION_FORMULA_MIN_MARKERS` 可调（0 关闭公式增强），`DOCLING_OCR_ENGINE`、`DOCLING_TIMEOUT_MS`、`DOCLING_POLL_MS` 可配
+- 增强：OCR 置信度 <0.8 或单页未解码公式 ≥10 处的页面走视觉模型单页增强，engine 记为 `docling+vision`；视觉失败保留 Docling 结果。`OCR_VISION_FORMULA_MIN_MARKERS` 可调（0 关闭公式增强），`DOCLING_OCR_ENGINE`（仅透传给 docling-serve）、`DOCLING_TIMEOUT_MS`、`DOCLING_POLL_MS` 可配
 - 进度/前端：整篇转换期间任务显示“整篇解析中”；逐页原文图仍由 pdfjs 200 DPI 渲染供校对；旧逐页缓存与校对写回链路不变
 - 验收：`check-docling.ts` 2 页样本 15.2s，p1 0.98 / p2 0.63；`check-ocr.ts` ALL PASS（p1 docling 0.98、p2 docling+vision，校对写回 5 切片并入库）；单页 PDF 走 JSON 降级，1 页 0.98；Docling 停服时任务明确失败并提示 `npm run docling:up`；旧链路删除后 `check-ocr` 仍 ALL PASS
 - 108 页全链路（force 重试复用 Docling 缓存）：691s，82 页 docling + 26 页 docling+vision，0 页待校对，413 切片并 indexed；切片中 28 个含 Markdown 表格、136 个含 `[公式]`、114 个含 `[图]`
@@ -436,8 +444,8 @@
 - Docling 转换任务不跨服务重启续跑：只在成功后写 `docling.json` 缓存，服务中途重启会重新提交整篇转换
 - 国内直连 GHCR/Quay 很慢：本机 `docker/.env` 使用南京大学镜像；换环境可改 `DOCLING_IMAGE`
 - OCR 页面原图按 200 DPI 保存（模糊扫描页实测约 0.56–0.97MB/页），大批量扫描件会明显增加 uploads 占用；删除资料会同步清理 OCR 原图与 Docling 缓存
-- 参考资料会累积低相关项；后台任务单 Worker 串行且失败无重试
-- 会话搜索为 `LIKE`（标题/消息内容），消息量很大时无 FTS 索引；上下文回放只取最近 24 条，超长会话的早期细节可能丢失
+- 参考资料会累积低相关项；单 Worker 串行，失败按 TASK_RETRY_MAX 重试（指数退避+抖动），watchdog 用 AbortController 中止
+- 会话搜索为 `LIKE`（标题/消息内容），消息量很大时无 FTS 索引；上下文回放由 CHAT_HISTORY_LIMIT 控制，默认 16 条、单条截断 6000 字，超长会话的早期细节可能丢失
 - 同一会话内不同角色仍各用独立 Pi 会话，但会通过 SQLite 历史重建共享上下文；跨会话仅共享画像/记忆/掌握度
 - 媒体暂无单张删除接口；未发送的图片可在存储治理页立即回收，或等周期清理（默认保留 30 天）
 - 存储清理为物理删除且不可撤销；UI 已提供预检与确认，但仍无法撤销误清理
@@ -461,3 +469,12 @@
 - 产出：缓存与路由模块、性能压测报告
 - 验收：TTFT/P95 达标，缓存命中可秒回
 - 贯穿性要求：P0 提速措施（流式、快模型、精简上下文）自 S04 起即执行，S23 只做集中优化与压测
+
+## 2026-11-12 · 代码整改收尾（依据《施工文档-EduPi代码整改.md》v1.1 / v1.2）
+
+- 已落地：B0 配置与常量收敛（含 tsconfig `allowImportingTsExtensions`）、B1 安全与上线阻断（CSRF、本机 bootstrap、MCP 配置期确认 + 存量回填、429 Retry-After、PII 可选脱敏、/privacy /terms 占位）、B2 有界自主与容错（步数/墙钟/token 预算、RAG 超时重试降级、quiz signal 贯穿、trace_id）、B3 功能补齐（routing 场景快模型、SSE 幂等重发、TTS volume 语义、评测指标口径拆分）。
+- 本轮新增文件：`server/src/config.ts`、`server/src/auth/csrf.ts`、`server/src/trace.ts`、`server/src/rag/resilience.ts`、`server/src/chat/idempotency.ts`、`server/src/mcp/backfill.ts`、`server/scripts/lib/same-origin-fetch.ts`、`server/scripts/check-resilience.ts`、`server/scripts/check-sse-idempotency.ts`、`server/scripts/check-config-keys.ts`、`server/scripts/migrate-mcp-confirmations.ts`、`web/src/views/PrivacyView.vue`、`web/src/views/TermsView.vue`。
+- 本轮新增/修改的验证脚本与命令：新增 `check-sse-idempotency.ts`、`check-config-keys.ts`、`check-resilience.ts`；`check-mcp.ts` 新增回填用例；`regression.ts` 补同源断言；`eval-rag.ts` 口径拆分。
+- 验证结果：`npm run build` 通过；`check-sse-idempotency.ts`、`check-config-keys.ts`、`check-resilience.ts`、`check-mcp.ts` 全部 ALL PASS；`npx tsc --noEmit -p server/tsconfig.json` 仅剩既有错误（word-extractor 缺类型、pdfjs `isEvalSupported`、Milvus SDK 类型、media.ts Buffer 类型），本轮未新增类型错误。
+- 未执行项：B4 部署配置（Q5 未定）、/privacy /terms 正文（Q6）、§9 数据修复重新索引（需用户授权）、评测集人工标注（C05 独立任务）、回归 `regression.ts` 与 `eval-rag.ts` 需服务与 Milvus 且受 geometry.txt 数据漂移影响未跑全量。
+- 文档同步：设计文档已升 v0.31 实现对齐版（含附录 B 对齐清单），README 与本章节同步。

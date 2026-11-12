@@ -1,3 +1,5 @@
+import { RagCallError, ragTimeoutSignal, withRetry } from './resilience.ts';
+
 export interface RerankResult {
   index: number;
   score: number;
@@ -11,17 +13,27 @@ export async function rerank(query: string, documents: string[], topN: number): 
   const host = new URL(baseUrl).origin;
   const model = process.env.RERANK_MODEL ?? 'gte-rerank-v2';
 
-  const res = await fetch(`${host}/api/v1/services/rerank/text-rerank/text-rerank`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      input: { query, documents },
-      parameters: { return_documents: false, top_n: topN },
-    }),
+  const data = await withRetry('Rerank 请求', async () => {
+    const res = await fetch(`${host}/api/v1/services/rerank/text-rerank/text-rerank`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        input: { query, documents },
+        parameters: { return_documents: false, top_n: topN },
+      }),
+      signal: ragTimeoutSignal(),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new RagCallError(
+        'RERANK_HTTP_ERROR',
+        `Rerank 失败（${res.status}）${detail ? `: ${detail.slice(0, 200)}` : ''}`,
+        res.status === 408 || res.status === 429 || res.status >= 500,
+      );
+    }
+    return (await res.json()) as { output?: { results?: { index: number; relevance_score: number }[] } };
   });
-  if (!res.ok) throw new Error(`Rerank 失败（${res.status}）: ${await res.text()}`);
-  const data = (await res.json()) as { output?: { results?: { index: number; relevance_score: number }[] } };
   const results = data.output?.results ?? [];
   return results.map((r) => ({ index: r.index, score: r.relevance_score }));
 }

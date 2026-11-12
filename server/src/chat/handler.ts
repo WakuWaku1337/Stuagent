@@ -34,6 +34,17 @@ import { getSettings } from '../settings/store.ts';
 import { profileContext } from '../learning/memory.ts';
 import { currentLearnerId } from '../learning/context.ts';
 import { getAnswerCache, putAnswerCache } from './answer-cache.ts';
+import { HISTORY_ITEM_MAX_CHARS, historyReplayLimit } from '../config.ts';
+import { enterTrace, currentTraceId, newTraceId, traceLog } from '../trace.ts';
+import {
+  beginIdempotency,
+  completeIdempotency,
+  failIdempotency,
+  lookupIdempotency,
+  normalizeRequestId,
+  replayIdempotent,
+  type IdempotentResponse,
+} from './idempotency.ts';
 
 export interface ChatBody {
   message?: string;
@@ -45,6 +56,8 @@ export interface ChatBody {
   mediaIds?: string[];
   continue?: boolean;
   regenerate?: boolean;
+  /** C01：同一次发送生成、断线重发复用；服务端据此去重 */
+  clientRequestId?: string;
 }
 
 function mergeCitations(target: Citation[], incoming: Citation[] | undefined): void {
@@ -67,7 +80,7 @@ function conversationPayload(conversation: Conversation) {
 
 function mediaErrorResponse(c: Context, error: unknown): Response | null {
   if (error instanceof MediaError) {
-    return c.json({ code: error.code, error: error.message }, error.status as 400);
+    return c.json({ code: error.code, error: error.message, message: error.message }, error.status as 400);
   }
   return null;
 }
@@ -124,7 +137,7 @@ async function buildHistory(
   excludeMessageId: string,
   vision: boolean,
 ): Promise<ChatHistoryItem[]> {
-  const limit = Math.min(60, Math.max(4, Number(process.env.CHAT_HISTORY_LIMIT ?? 16)));
+  const limit = historyReplayLimit();
   const items = listMessages(conversationId, { limit }).messages.filter(
     (item) => item.message_id !== excludeMessageId,
   );
@@ -167,7 +180,10 @@ async function buildHistory(
 
     history.unshift({
       role: item.role,
-      content: content.length > 6000 ? `${content.slice(0, 6000)}…` : content,
+      content:
+        content.length > HISTORY_ITEM_MAX_CHARS
+          ? `${content.slice(0, HISTORY_ITEM_MAX_CHARS)}…`
+          : content,
       created_at: item.created_at,
       ...(images ? { images } : {}),
     });
@@ -180,6 +196,7 @@ async function handleContinuation(
   body: ChatBody,
   preset?: Conversation,
 ): Promise<Response> {
+  const traceId = currentTraceId();
   const conversation =
     preset ??
     (body.conversationId?.trim() ? getConversation(body.conversationId.trim()) : undefined);
@@ -189,6 +206,11 @@ async function handleContinuation(
   if (!assistant) return c.json({ error: '该会话还没有可续写的回复' }, 400);
 
   const regenerate = body.regenerate === true;
+  traceLog('chat.input', {
+    conversation: conversation.conversation_id,
+    continue: !regenerate,
+    regenerate,
+  });
   const settings = getSettings();
   const vision = modelSupportsVision(modelOrDefault(settings.provider, settings.model));
   const reasoning =
@@ -247,12 +269,20 @@ async function handleContinuation(
       let writeChain: Promise<void> = Promise.resolve();
       const emit = (event: string, payload: unknown) => {
         writeChain = writeChain
-          .then(() => stream.writeSSE({ event, data: JSON.stringify(payload) }))
+          .then(() =>
+            stream.writeSSE({
+              event,
+              data: JSON.stringify({ ...(payload as Record<string, unknown>), trace_id: traceId }),
+            }),
+          )
           .catch(() => undefined);
       };
 
       try {
-        await stream.writeSSE({ event: 'conversation', data: JSON.stringify(conversationInfo) });
+        await stream.writeSSE({
+          event: 'conversation',
+          data: JSON.stringify({ ...conversationInfo, trace_id: traceId }),
+        });
         await stream.writeSSE({
           event: 'route',
           data: JSON.stringify({
@@ -260,6 +290,7 @@ async function handleContinuation(
             agent: decision.agent,
             agent_name: AGENTS[decision.agent].name,
             reason: decision.reason,
+            trace_id: traceId,
           }),
         });
         await chat(
@@ -282,6 +313,7 @@ async function handleContinuation(
               const tail = redactor.flush();
               if (tail) emit('delta', { type: 'delta', text: tail });
               persist(full);
+              traceLog('chat.output', { text: full });
               emit('done', { type: 'done', text: full, regenerated: regenerate });
               return;
             }
@@ -314,6 +346,7 @@ async function handleContinuation(
       { reasoning, history },
     );
     const filtered = filterOutput(raw);
+    traceLog('chat.output', { text: filtered.text });
     if (filtered.text.trim()) saveAssistant(filtered.text, citations);
     return c.json({
       sessionId: conversation.conversation_id,
@@ -326,9 +359,10 @@ async function handleContinuation(
       citations,
       continued: !regenerate,
       regenerated: regenerate,
+      trace_id: traceId,
     });
   } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+    return c.json({ error: e instanceof Error ? e.message : String(e), trace_id: traceId }, 502);
   }
 }
 
@@ -358,6 +392,34 @@ export async function handleChat(
   body: ChatBody,
   preset?: Conversation,
 ): Promise<Response> {
+  const traceId = enterTrace(newTraceId());
+  const requestId = normalizeRequestId(body.clientRequestId);
+  if (body.clientRequestId !== undefined && !requestId) {
+    return c.json(
+      {
+        code: 'INVALID_REQUEST_ID',
+        error: 'clientRequestId 格式不合法',
+        message: 'clientRequestId 格式不合法',
+      },
+      400,
+    );
+  }
+  if (requestId) {
+    const existing = lookupIdempotency(requestId);
+    if (existing.status === 'done') {
+      return replayIdempotent(c, existing.response, Boolean(body.stream), traceId);
+    }
+    if (existing.status === 'processing') {
+      return c.json(
+        {
+          code: 'REQUEST_IN_PROGRESS',
+          error: '请求正在处理中，请稍后重试',
+          message: '请求正在处理中，请稍后重试',
+        },
+        409,
+      );
+    }
+  }
   const message = body.message?.trim() ?? '';
   if (body.mediaIds !== undefined && !Array.isArray(body.mediaIds)) {
     return c.json({ error: 'mediaIds 必须是数组' }, 400);
@@ -381,11 +443,26 @@ export async function handleChat(
 
   const guard = checkInput(message);
   if (guard.blocked) {
-    return c.json({ code: 'SECURITY_BLOCKED', message: guard.reason, matches: guard.matches }, 400);
+    return c.json(
+      {
+        code: 'SECURITY_BLOCKED',
+        error: guard.reason,
+        message: guard.reason,
+        matches: guard.matches,
+      },
+      400,
+    );
   }
   const redacted = redactPII(message);
   const safeMessage = redacted.text;
   const securityInfo = { input_redactions: redacted.hits };
+  traceLog('chat.input', {
+    message: safeMessage,
+    media: mediaIds.length,
+    agent: body.agent ?? '',
+    continue: Boolean(body.continue),
+    regenerate: Boolean(body.regenerate),
+  });
 
   const settings = getSettings();
   const vision = modelSupportsVision(modelOrDefault(settings.provider, settings.model));
@@ -417,12 +494,25 @@ export async function handleChat(
   const routeText = [safeMessage, ocrText.slice(0, 1200)].filter(Boolean).join('\n') || fallbackText;
   const reasoning = inferReasoning(modelInput, body.reasoning);
 
+  if (requestId && !beginIdempotency(requestId)) {
+    return c.json(
+      {
+        code: 'REQUEST_IN_PROGRESS',
+        error: '请求正在处理中，请稍后重试',
+        message: '请求正在处理中，请稍后重试',
+      },
+      409,
+    );
+  }
   let conversation = preset;
   if (!conversation) {
     const explicitId = body.conversationId?.trim();
     if (explicitId) {
       conversation = getConversation(explicitId);
-      if (!conversation) return c.json({ error: '会话不存在' }, 404);
+      if (!conversation) {
+        if (requestId) failIdempotency(requestId);
+        return c.json({ error: '会话不存在' }, 404);
+      }
     } else {
       conversation = createConversation();
     }
@@ -454,6 +544,35 @@ export async function handleChat(
     attachments,
   };
 
+  // C01：一次请求只允许结算一次；成功写入可重放响应，失败释放执行权。
+  let idempotencySettled = false;
+  const settleIdempotency = (response?: IdempotentResponse) => {
+    if (!requestId || idempotencySettled) return;
+    idempotencySettled = true;
+    if (response) completeIdempotency(requestId, conversation!.conversation_id, response);
+    else failIdempotency(requestId);
+  };
+  const idempotentResponse = (text: string, citations: Citation[]): IdempotentResponse => ({
+    conversation: conversationInfo,
+    media: mediaInfo,
+    route: { agent: decision.agent, agent_name: AGENTS[decision.agent].name, reason: decision.reason },
+    security: securityInfo,
+    citations,
+    text,
+    json: {
+      sessionId: conversation!.conversation_id,
+      conversation_id: conversation!.conversation_id,
+      conversation_title: conversation!.title,
+      agent: decision.agent,
+      agent_name: AGENTS[decision.agent].name,
+      route_reason: decision.reason,
+      reply: text,
+      citations,
+      media: mediaInfo,
+      security: securityInfo,
+    },
+  });
+
   const canCacheAnswer =
     mediaIds.length === 0 &&
     !ocrText &&
@@ -473,6 +592,7 @@ export async function handleChat(
   if (cachedAnswer) {
     const cachedText = filterOutput(cachedAnswer.answer).text;
     if (cachedText.trim()) {
+      settleIdempotency(idempotentResponse(cachedText, cachedAnswer.citations));
       try {
         addMessage(conversation.conversation_id, {
           role: 'assistant',
@@ -485,8 +605,14 @@ export async function handleChat(
       }
       if (body.stream) {
         return streamSSE(c, async (stream) => {
-          await stream.writeSSE({ event: 'conversation', data: JSON.stringify(conversationInfo) });
-          await stream.writeSSE({ event: 'media', data: JSON.stringify({ type: 'media', ...mediaInfo }) });
+          await stream.writeSSE({
+            event: 'conversation',
+            data: JSON.stringify({ ...conversationInfo, trace_id: traceId }),
+          });
+          await stream.writeSSE({
+            event: 'media',
+            data: JSON.stringify({ type: 'media', ...mediaInfo, trace_id: traceId }),
+          });
           await stream.writeSSE({
             event: 'route',
             data: JSON.stringify({
@@ -494,21 +620,32 @@ export async function handleChat(
               agent: decision.agent,
               agent_name: AGENTS[decision.agent].name,
               reason: `${decision.reason} · 缓存命中`,
+              trace_id: traceId,
             }),
           });
           if (redacted.hits.length > 0) {
-            await stream.writeSSE({ event: 'security', data: JSON.stringify({ type: 'security', ...securityInfo }) });
+            await stream.writeSSE({
+              event: 'security',
+              data: JSON.stringify({ type: 'security', ...securityInfo, trace_id: traceId }),
+            });
           }
           if (cachedAnswer.citations.length > 0) {
             await stream.writeSSE({
               event: 'citations',
-              data: JSON.stringify({ type: 'citations', citations: cachedAnswer.citations }),
+              data: JSON.stringify({
+                type: 'citations',
+                citations: cachedAnswer.citations,
+                trace_id: traceId,
+              }),
             });
           }
-          await stream.writeSSE({ event: 'delta', data: JSON.stringify({ type: 'delta', text: cachedText }) });
+          await stream.writeSSE({
+            event: 'delta',
+            data: JSON.stringify({ type: 'delta', text: cachedText, trace_id: traceId }),
+          });
           await stream.writeSSE({
             event: 'done',
-            data: JSON.stringify({ type: 'done', text: cachedText, cached: true }),
+            data: JSON.stringify({ type: 'done', text: cachedText, cached: true, trace_id: traceId }),
           });
         });
       }
@@ -523,6 +660,7 @@ export async function handleChat(
         citations: cachedAnswer.citations,
         media: mediaInfo,
         cached: true,
+        trace_id: traceId,
       });
     }
   }
@@ -556,15 +694,23 @@ export async function handleChat(
       let writeChain: Promise<void> = Promise.resolve();
       const emit = (event: string, payload: unknown) => {
         writeChain = writeChain
-          .then(() => stream.writeSSE({ event, data: JSON.stringify(payload) }))
+          .then(() =>
+            stream.writeSSE({
+              event,
+              data: JSON.stringify({ ...(payload as Record<string, unknown>), trace_id: traceId }),
+            }),
+          )
           .catch(() => undefined);
       };
 
       try {
-        await stream.writeSSE({ event: 'conversation', data: JSON.stringify(conversationInfo) });
+        await stream.writeSSE({
+          event: 'conversation',
+          data: JSON.stringify({ ...conversationInfo, trace_id: traceId }),
+        });
         await stream.writeSSE({
           event: 'media',
-          data: JSON.stringify({ type: 'media', ...mediaInfo }),
+          data: JSON.stringify({ type: 'media', ...mediaInfo, trace_id: traceId }),
         });
         await stream.writeSSE({
           event: 'route',
@@ -573,12 +719,13 @@ export async function handleChat(
             agent: decision.agent,
             agent_name: AGENTS[decision.agent].name,
             reason: decision.reason,
+            trace_id: traceId,
           }),
         });
         if (redacted.hits.length > 0) {
           await stream.writeSSE({
             event: 'security',
-            data: JSON.stringify({ type: 'security', ...securityInfo }),
+            data: JSON.stringify({ type: 'security', ...securityInfo, trace_id: traceId }),
           });
         }
         await chat(
@@ -601,8 +748,10 @@ export async function handleChat(
               const tail = redactor.flush();
               if (tail) emit('delta', { type: 'delta', text: tail });
               persistAssistant(full);
+              traceLog('chat.output', { text: full });
               if (canCacheAnswer) putAnswerCache(cacheKey, full, citations);
               emit('done', { type: 'done', text: full });
+              settleIdempotency(idempotentResponse(full, citations));
               return;
             }
             if (event.type === 'error') persistAssistant(assistantText);
@@ -621,8 +770,11 @@ export async function handleChat(
         }
       } catch (e) {
         persistAssistant(assistantText);
+        settleIdempotency();
         emit('error', { type: 'error', message: e instanceof Error ? e.message : String(e) });
       } finally {
+        // done 已结算时为空操作；异常或未收到 done 时释放幂等执行权。
+        settleIdempotency();
         await writeChain;
       }
     });
@@ -641,6 +793,7 @@ export async function handleChat(
       { reasoning, history, images },
     );
     const filtered = filterOutput(raw);
+    traceLog('chat.output', { text: filtered.text });
     let assistantMessageId = '';
     if (filtered.text.trim()) {
       if (canCacheAnswer) putAnswerCache(cacheKey, filtered.text, citations);
@@ -659,6 +812,14 @@ export async function handleChat(
     if (autoViz && assistantMessageId) {
       setMessageVisualization(assistantMessageId, autoViz.visualization.visualization_id);
     }
+    const replayable = idempotentResponse(filtered.text, citations);
+    replayable.json = {
+      ...replayable.json,
+      visualization: autoViz?.visualization,
+      visualization_matched: autoViz?.matched,
+      security: { ...securityInfo, output_redactions: filtered.hits },
+    };
+    settleIdempotency(replayable);
     return c.json({
       sessionId: conversation.conversation_id,
       conversation_id: conversation.conversation_id,
@@ -672,8 +833,11 @@ export async function handleChat(
       visualization: autoViz?.visualization,
       visualization_matched: autoViz?.matched,
       security: { ...securityInfo, output_redactions: filtered.hits },
+      trace_id: traceId,
     });
   } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+    settleIdempotency();
+    const messageText = e instanceof Error ? e.message : String(e);
+    return c.json({ error: messageText, message: messageText, trace_id: traceId }, 502);
   }
 }

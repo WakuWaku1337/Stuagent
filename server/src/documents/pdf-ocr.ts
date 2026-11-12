@@ -34,7 +34,7 @@ const LARGE_IMAGE_RATIO = 0.4;
 const ENGINE_MODE = (process.env.OCR_ENGINE ?? 'auto').trim().toLowerCase();
 
 export type OcrPageStatus = 'pending' | 'text' | 'ocr' | 'review' | 'confirmed' | 'failed';
-export type OcrEngineUsed = 'text' | 'docling' | 'docling+vision';
+export type OcrEngineUsed = 'text' | 'docling' | 'docling+vision' | 'vision';
 
 export interface PdfPageAnalysis {
   page: number;
@@ -93,11 +93,11 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-const ALLOWED_MODES = new Set(['auto', 'docling', 'docling+vision']);
+const ALLOWED_MODES = new Set(['auto', 'docling', 'docling+vision', 'vision']);
 
 function assertEngineMode(): void {
   if (!ALLOWED_MODES.has(ENGINE_MODE)) {
-    throw new Error(`OCR_ENGINE=${ENGINE_MODE} 已移除；请使用 auto、docling 或 docling+vision`);
+    throw new Error(`OCR_ENGINE=${ENGINE_MODE} 不支持；请使用 auto、docling、docling+vision 或 vision`);
   }
 }
 
@@ -634,6 +634,80 @@ async function runDoclingPages(
   return { done: pending.length, low, failed };
 }
 
+/** 纯视觉大模型 OCR：不依赖 Docling，逐页把渲染图交给多模态模型识别 */
+async function runVisionPages(
+  documentId: string,
+  doc: NonNullable<ReturnType<typeof getDocument>>,
+  pending: number[],
+  existing: Map<number, OcrPageRow>,
+  model: string,
+  doneStart: number,
+): Promise<{ done: number; low: number; failed: number }> {
+  let low = 0;
+  let failed = 0;
+  for (const [index, pageNo] of pending.entries()) {
+    if (!getDocument(documentId)) break;
+    const row = getOcrPage(documentId, pageNo) ?? existing.get(pageNo);
+    const imagePath = row?.image_file ? join(uploadsDir, row.image_file) : null;
+    const image = imagePath && existsSync(imagePath) ? await readFile(imagePath) : null;
+    if (!image) {
+      saveOcrPage({
+        document_id: documentId,
+        page: pageNo,
+        status: 'failed',
+        engine: 'vision',
+        markdown: row?.markdown ?? '',
+        confidence: 0,
+        image_file: row?.image_file ?? null,
+        width: row?.width ?? null,
+        height: row?.height ?? null,
+      });
+      failed += 1;
+    } else {
+      const cap = sharpnessCap(await imageSharpness(image));
+      try {
+        const result = await ocrPageVision(image, model, {
+          subject: doc.subject ?? undefined,
+          qualityCap: cap,
+        });
+        const isLow = !result.markdown.trim() || result.confidence < CONFIDENCE_THRESHOLD;
+        saveOcrPage({
+          document_id: documentId,
+          page: pageNo,
+          status: isLow ? 'review' : 'ocr',
+          engine: 'vision',
+          markdown: result.markdown,
+          confidence: result.confidence,
+          image_file: row?.image_file ?? null,
+          width: row?.width ?? null,
+          height: row?.height ?? null,
+        });
+        if (isLow) low += 1;
+      } catch {
+        saveOcrPage({
+          document_id: documentId,
+          page: pageNo,
+          status: 'failed',
+          engine: 'vision',
+          markdown: '',
+          confidence: 0,
+          image_file: row?.image_file ?? null,
+          width: row?.width ?? null,
+          height: row?.height ?? null,
+        });
+        failed += 1;
+      }
+    }
+    updateOcrJobProgress(documentId, {
+      done_pages: doneStart + index + 1,
+      low_confidence: low,
+      failed_pages: failed,
+      current_page: pageNo,
+    });
+  }
+  return { done: pending.length, low, failed };
+}
+
 async function runOcrJob(
   documentId: string,
   options: { analysis?: PdfAnalysis; force?: boolean } = {},
@@ -756,8 +830,17 @@ async function runOcrJobInner(
       });
     }
 
-    const result = await runDoclingPages(documentId, doc, buffer, pending, existing, model, done);
-    done += result.done;
+    const useVision = ENGINE_MODE === 'vision' || !(await doclingAvailable());
+    if (useVision) {
+      if (!model) {
+        throw new Error('未配置视觉模型；请在 .env 设置 LLM_OCR_MODEL 为支持图片的模型（如 qwen-vl-max）');
+      }
+      const result = await runVisionPages(documentId, doc, pending, existing, model, done);
+      done += result.done;
+    } else {
+      const result = await runDoclingPages(documentId, doc, buffer, pending, existing, model, done);
+      done += result.done;
+    }
 
     const chunkCount = rebuildChunksFromOcr(documentId);
     const allPages = listOcrPages(documentId);

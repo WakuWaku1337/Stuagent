@@ -1,3 +1,5 @@
+import './lib/same-origin-fetch.ts';
+
 const BASE = (process.env.BASE_URL ?? 'http://127.0.0.1:3000').replace(/\/+$/, '');
 const USER = process.env.AUTH_TEST_USER ?? 'admin';
 const PASSWORD = process.env.AUTH_TEST_PASSWORD ?? 'admin12345';

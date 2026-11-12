@@ -1,5 +1,7 @@
 import { DataType, MetricType, MilvusClient } from '@zilliz/milvus2-sdk-node';
 import { currentLearnerId } from '../learning/context.ts';
+import { MILVUS_TIMEOUT_MS, RAG_RETRY_MAX } from '../config.ts';
+import { RagCallError } from './resilience.ts';
 
 export const DIM = 1024;
 export const LEGACY_COLLECTION = 'edu_chunks';
@@ -14,7 +16,19 @@ export function collectionFor(learnerId = currentLearnerId()): string {
 let client: MilvusClient | null = null;
 export function milvus(): MilvusClient {
   if (!client) {
-    client = new MilvusClient({ address: process.env.MILVUS_ADDRESS ?? 'localhost:19530' });
+    client = new MilvusClient({
+      address: process.env.MILVUS_ADDRESS ?? 'localhost:19530',
+      timeout: MILVUS_TIMEOUT_MS,
+      maxRetries: RAG_RETRY_MAX,
+      retryDelay: 300,
+      ...(process.env.MILVUS_TOKEN?.trim() ? { token: process.env.MILVUS_TOKEN.trim() } : {}),
+      ...(process.env.MILVUS_USERNAME?.trim()
+        ? {
+            username: process.env.MILVUS_USERNAME.trim(),
+            password: process.env.MILVUS_PASSWORD ?? '',
+          }
+        : {}),
+    });
   }
   return client;
 }
@@ -139,40 +153,47 @@ export async function hybridRecall(
   subject?: string,
   learnerId = currentLearnerId(),
 ): Promise<SearchHit[]> {
-  await ensureCollection(learnerId);
-  const expr = subject ? `subject == "${subject.replace(/"/g, '')}"` : undefined;
-  const res = await milvus().search({
-    collection_name: collectionFor(learnerId),
-    data: [
-      {
-        anns_field: 'dense_vector',
-        data: [dense],
-        limit,
-        params: { ef: 64 },
-        ...(expr ? { expr } : {}),
-      },
-      {
-        anns_field: 'sparse_vector',
-        data: [query],
-        limit,
-        params: {},
-        ...(expr ? { expr } : {}),
-      },
-    ],
-    rerank: { strategy: 'rrf', params: { k: 60 } },
-    limit,
-    output_fields: ['chunk_id', 'text', 'subject', 'source_id', 'source_name', 'chapter', 'page'],
-  });
+  try {
+    await ensureCollection(learnerId);
+    const expr = subject ? `subject == "${subject.replace(/"/g, '')}"` : undefined;
+    const res = await milvus().search({
+      collection_name: collectionFor(learnerId),
+      data: [
+        {
+          anns_field: 'dense_vector',
+          data: [dense],
+          limit,
+          params: { ef: 64 },
+          ...(expr ? { expr } : {}),
+        },
+        {
+          anns_field: 'sparse_vector',
+          data: [query],
+          limit,
+          params: {},
+          ...(expr ? { expr } : {}),
+        },
+      ],
+      rerank: { strategy: 'rrf', params: { k: 60 } },
+      limit,
+      timeout: MILVUS_TIMEOUT_MS,
+      output_fields: ['chunk_id', 'text', 'subject', 'source_id', 'source_name', 'chapter', 'page'],
+    });
 
-  const results = res.results ?? [];
-  return (results as unknown as Record<string, unknown>[]).map((row) => ({
-    chunk_id: String(row.chunk_id ?? ''),
-    text: String(row.text ?? ''),
-    subject: String(row.subject ?? ''),
-    source_id: String(row.source_id ?? ''),
-    source_name: String(row.source_name ?? ''),
-    chapter: String(row.chapter ?? ''),
-    page: Number(row.page ?? 0),
-    score: Number(row.score ?? 0),
-  }));
+    const results = res.results ?? [];
+    return (results as unknown as Record<string, unknown>[]).map((row) => ({
+      chunk_id: String(row.chunk_id ?? ''),
+      text: String(row.text ?? ''),
+      subject: String(row.subject ?? ''),
+      source_id: String(row.source_id ?? ''),
+      source_name: String(row.source_name ?? ''),
+      chapter: String(row.chapter ?? ''),
+      page: Number(row.page ?? 0),
+      score: Number(row.score ?? 0),
+    }));
+  } catch (error) {
+    if (error instanceof RagCallError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new RagCallError('MILVUS_UNAVAILABLE', `向量检索不可用：${message}`, true);
+  }
 }

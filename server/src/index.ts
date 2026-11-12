@@ -12,6 +12,7 @@ import documents from './routes/documents.ts';
 import authRoutes from './routes/auth.ts';
 import adminRoutes from './routes/admin.ts';
 import { requireAuth, websocketUser } from './auth/middleware.ts';
+import { csrfGuard } from './auth/csrf.ts';
 import { authEnabled } from './auth/service.ts';
 import learning from './routes/learning.ts';
 import reviews from './routes/reviews.ts';
@@ -36,11 +37,13 @@ const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const envPath = resolve(serverRoot, '.env');
 if (existsSync(envPath)) process.loadEnvFile(envPath);
 
-if (process.env.NODE_ENV === 'production' && !authEnabled()) {
-  throw new Error('生产环境禁止 AUTH_ENABLED=0');
+if (!authEnabled()) {
+  if (process.env.NODE_ENV === 'production') throw new Error('生产环境禁止 AUTH_ENABLED=0');
+  console.warn('[security] AUTH_ENABLED=0：已关闭认证，仅限隔离测试，禁止用于生产');
 }
 
 const app = new Hono();
+app.use('/api/*', csrfGuard);
 app.use('/api/*', requireAuth);
 const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
 const wsClients = new Set<{ ws: { send: (data: string) => void; readyState: number }; learnerId: string }>();

@@ -34,6 +34,15 @@ import {
   type ResolvedKey,
 } from './settings/store.ts';
 import { recordUsage } from './usage/store.ts';
+import {
+  AGENT_MAX_TOOL_STEPS,
+  AGENT_TOKEN_BUDGET,
+  AGENT_WALL_CLOCK_MS,
+  HISTORY_ITEM_MAX_CHARS,
+  LLM_KEY_MAX_ATTEMPTS,
+  historyReplayLimit,
+} from './config.ts';
+import { currentTraceId } from './trace.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const dataRoot = process.env.EDU_DATA_DIR?.trim()
@@ -180,9 +189,11 @@ function replaySession(agentId: AgentId, candidate: Candidate, history: ChatHist
   const settings = getSettings();
   const provider = findProvider(settings.provider);
   const { model } = buildModelEntry(settings.model);
-  for (const item of history.slice(-24)) {
+  for (const item of history.slice(-historyReplayLimit())) {
     const clipped =
-      item.content.length > 8000 ? `${item.content.slice(0, 8000)}…` : item.content;
+      item.content.length > HISTORY_ITEM_MAX_CHARS
+        ? `${item.content.slice(0, HISTORY_ITEM_MAX_CHARS)}…`
+        : item.content;
     const content = item.role === 'user' ? redactPII(clipped).text : clipped;
     if (!content.trim() && !item.images?.length) continue;
     if (item.role === 'user') {
@@ -313,6 +324,16 @@ function inferStatus(message: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function limitMessage(reason: 'wall_clock' | 'token_budget' | 'tool_steps'): string {
+  if (reason === 'token_budget') {
+    return `已达到 token 预算（${AGENT_TOKEN_BUDGET}），已停止生成，可人工接管继续`;
+  }
+  if (reason === 'tool_steps') {
+    return `已达到工具调用步数上限（${AGENT_MAX_TOOL_STEPS}），已停止生成，可人工接管继续`;
+  }
+  return `已达到单次会话墙钟上限（${Math.round(AGENT_WALL_CLOCK_MS / 1000)}s），已停止生成，可人工接管继续`;
+}
+
 export async function chat(
   sessionId: string,
   message: string,
@@ -331,15 +352,24 @@ export async function chat(
   }
   const start = candidateCursor % available.length;
   candidateCursor += 1;
-  const ordered = [...available.slice(start), ...available.slice(0, start)];
+  const rotated = [...available.slice(start), ...available.slice(0, start)];
+  // 先轮换起点，再按配置截断，避免主对话一次耗尽全部密钥
+  const ordered = rotated.slice(0, LLM_KEY_MAX_ATTEMPTS);
   const reasoning = options.reasoning ?? settings.reasoning;
   const profile = profileContext();
   const promptText = profile ? `【学习者画像】\n${profile}\n\n【学生输入】\n${message}` : message;
   const failures: string[] = [];
   let lastError: Error | null = null;
+  const traceId = currentTraceId();
+  const timeoutSignal = AGENT_WALL_CLOCK_MS > 0 ? AbortSignal.timeout(AGENT_WALL_CLOCK_MS) : null;
+  const effectiveSignal = timeoutSignal
+    ? signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal
+    : signal;
 
   for (const candidate of ordered) {
-    if (signal?.aborted) throw new DOMException('已取消', 'AbortError');
+    if (effectiveSignal?.aborted) throw new DOMException('已取消', 'AbortError');
     const sessionKey = `${agentId}:${sessionId}:${candidate.providerId}`;
     const started = Date.now();
     let fullText = '';
@@ -350,6 +380,8 @@ export async function chat(
     let continuing = false;
     let continuationText = '';
     let lastThinkingAt = 0;
+    let limitHit: 'wall_clock' | 'token_budget' | 'tool_steps' | null = null;
+    let toolSteps = 0;
 
     try {
       const session = await getSession(sessionId, agentId, candidate, reasoning, options.history);
@@ -358,6 +390,14 @@ export async function chat(
       markKeyUsed(candidate.keyId);
 
       const unsubscribe = session.subscribe((event) => {
+        if (event.type === 'tool_execution_start') {
+          toolSteps += 1;
+          if (AGENT_MAX_TOOL_STEPS > 0 && toolSteps >= AGENT_MAX_TOOL_STEPS && !limitHit) {
+            limitHit = 'tool_steps';
+            session.abort();
+          }
+          return;
+        }
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta') {
           const now = Date.now();
           if (now - lastThinkingAt > 800) {
@@ -388,6 +428,10 @@ export async function chat(
                 reasoning: usageTotals.reasoning + usage.reasoning,
                 cost: usageTotals.cost + usage.cost,
               };
+              if (AGENT_TOKEN_BUDGET > 0 && usageTotals.total >= AGENT_TOKEN_BUDGET && !limitHit) {
+                limitHit = 'token_budget';
+                session.abort();
+              }
             }
             if (msg.stopReason === 'error') {
               errorMessage = msg.errorMessage ?? '模型调用失败';
@@ -397,46 +441,56 @@ export async function chat(
       });
 
       const abortHandler = () => session.abort();
-      signal?.addEventListener('abort', abortHandler);
+      effectiveSignal?.addEventListener('abort', abortHandler);
+      let attempts = 0;
       try {
-        await session.prompt(promptText, options.images?.length ? { images: options.images } : undefined);
-        // 等 session 完全空闲，避免续写提示与尾部分片并发
-        await session.waitForIdle();
+        try {
+          await session.prompt(promptText, options.images?.length ? { images: options.images } : undefined);
+          // 等 session 完全空闲，避免续写提示与尾部分片并发
+          await session.waitForIdle();
+        } catch (error) {
+          const capped = limitHit !== null || (timeoutSignal?.aborted === true && signal?.aborted !== true);
+          if (!capped) throw error;
+        }
 
-        let attempts = 0;
-      while (
-        !signal?.aborted &&
-        attempts < MAX_CONTINUATIONS &&
-        (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText)))
-      ) {
-        attempts += 1;
-        onEvent({ type: 'continuation', attempt: attempts });
-        continuing = true;
-        continuationText = '';
-        stopReason = '';
-        let continuationFailed = false;
-        for (let retry = 0; retry < 2; retry += 1) {
-          try {
-            await session.prompt(continuationPrompt(fullText, attempts));
-            continuationFailed = false;
-            break;
-          } catch {
-            continuationFailed = true;
-            await new Promise((resolve) => setTimeout(resolve, 200));
+        while (
+          !effectiveSignal?.aborted &&
+          attempts < MAX_CONTINUATIONS &&
+          (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText)))
+        ) {
+          attempts += 1;
+          onEvent({ type: 'continuation', attempt: attempts });
+          continuing = true;
+          continuationText = '';
+          stopReason = '';
+          let continuationFailed = false;
+          for (let retry = 0; retry < 2 && !effectiveSignal?.aborted; retry += 1) {
+            try {
+              await session.prompt(continuationPrompt(fullText, attempts));
+              continuationFailed = false;
+              break;
+            } catch {
+              continuationFailed = true;
+              await new Promise((resolve) => setTimeout(resolve, 200));
+            }
           }
+          continuing = false;
+          await session.waitForIdle();
+          const merged = mergeContinuation(fullText, continuationText);
+          const addition = merged.slice(fullText.length);
+          if (addition) {
+            fullText = merged;
+            emitted = true;
+            onEvent({ type: 'delta', text: addition });
+          }
+          if (continuationFailed || !addition) break;
         }
-        continuing = false;
-        await session.waitForIdle();
-        const merged = mergeContinuation(fullText, continuationText);
-        const addition = merged.slice(fullText.length);
-        if (addition) {
-          fullText = merged;
-          emitted = true;
-          onEvent({ type: 'delta', text: addition });
+        if (!limitHit && timeoutSignal?.aborted && signal?.aborted !== true) {
+          limitHit = 'wall_clock';
         }
-        if (continuationFailed || !addition) break;
-      }
-        if (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText))) {
+        if (limitHit) {
+          onEvent({ type: 'incomplete', message: limitMessage(limitHit), attempt: attempts });
+        } else if (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText))) {
           onEvent({
             type: 'incomplete',
             message: '输出可能被截断，可点击“继续生成”或“重新生成”',
@@ -446,10 +500,14 @@ export async function chat(
       } finally {
         unsubscribe();
         citationSinks.delete(sessionKey);
-        signal?.removeEventListener('abort', abortHandler);
+        effectiveSignal?.removeEventListener('abort', abortHandler);
       }
 
       if (errorMessage) throw new Error(errorMessage);
+      if (limitHit && !fullText.trim()) {
+        // 带上限标记的空回复视为中止，避免把预算/步数上限误记为密钥故障
+        throw new DOMException(limitMessage(limitHit), 'AbortError');
+      }
 
       const latencyMs = Date.now() - started;
       recordUsage({
@@ -464,6 +522,7 @@ export async function chat(
         cost: usageTotals.cost,
         success: true,
         keyId: candidate.keyId,
+        traceId: traceId || undefined,
       });
       markKeySuccess(candidate.keyId);
       onEvent({ type: 'done', text: fullText });
@@ -485,6 +544,7 @@ export async function chat(
         success: false,
         error: messageText,
         keyId: candidate.keyId,
+        traceId: traceId || undefined,
       });
       const status = inferStatus(messageText);
       if (

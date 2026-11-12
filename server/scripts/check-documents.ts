@@ -9,6 +9,7 @@ process.env.EDU_UPLOADS_DIR = uploadsDir;
 
 const { db, getDocument, listChunks } = await import('../src/store.ts');
 const { ingestFile, normalizeSourcePath } = await import('../src/documents/service.ts');
+const { MAX_BATCH_BYTES, MAX_BATCH_FILES, MAX_FILE_BYTES } = await import('../src/documents/limits.ts');
 
 let failures = 0;
 
@@ -25,6 +26,25 @@ try {
   );
   report(normalizeSourcePath('', 'fallback.txt') === 'fallback.txt', 'fallback source path');
 
+  report(
+    MAX_FILE_BYTES === 50 * 1024 * 1024 &&
+      MAX_BATCH_FILES === 50 &&
+      MAX_BATCH_BYTES === 200 * 1024 * 1024,
+    'upload limits are 50MB / 50 files / 200MB',
+  );
+  let tooLarge: { code?: string; detail?: unknown } | null = null;
+  try {
+    await ingestFile(
+      new File([new Uint8Array(MAX_FILE_BYTES + 1)], 'too-large.pdf', { type: 'application/pdf' }),
+      {},
+    );
+  } catch (error) {
+    tooLarge = error as { code?: string; detail?: { max?: string } };
+  }
+  report(
+    tooLarge?.code === 'FILE_TOO_LARGE' && (tooLarge.detail as { max?: string })?.max === '50MB',
+    'file over 50MB rejected with detail.max',
+  );
   const first = await ingestFile(
     new File(['函数是描述两个变量之间关系的规则。\n定义域与值域需要重点关注。'], 'lesson1.txt', {
       type: 'text/plain',

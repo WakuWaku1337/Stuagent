@@ -329,6 +329,22 @@ async function confirmReview() {
 async function upload() {
   const files = fileList.value.flatMap((f) => (f.raw ? [f.raw] : []));
   if (files.length === 0) return;
+  if (files.length > MAX_BATCH_FILES) {
+    ElMessage.error(`单次最多上传 ${MAX_BATCH_FILES} 个文件，请分批选择`);
+    return;
+  }
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_BATCH_BYTES) {
+    ElMessage.error('单次上传总大小不能超过 200MB，请分批上传');
+    return;
+  }
+  const oversized = files.filter((file) => file.size > MAX_FILE_BYTES);
+  if (oversized.length > 0) {
+    ElMessage.error(
+      `有 ${oversized.length} 个文件超过单文件 50MB：${oversized.slice(0, 3).map((file) => file.name).join('、')}`,
+    );
+    return;
+  }
   uploading.value = true;
   message.value = '';
   const form = new FormData();
@@ -364,8 +380,12 @@ async function upload() {
 }
 
 const FOLDER_EXTENSIONS = new Set(['.pdf', '.docx', '.doc', '.txt', '.md', '.markdown']);
+// 与 server/src/documents/limits.ts 保持一致
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_BATCH_FILES = 50;
+const MAX_BATCH_BYTES = 200 * 1024 * 1024;
 const MAX_FOLDER_FILES = 100;
-const MAX_FOLDER_BYTES = 300 * 1024 * 1024;
+const MAX_FOLDER_BYTES = MAX_BATCH_BYTES;
 const FOLDER_BATCH_FILES = 20;
 
 interface FolderFile {
@@ -404,7 +424,14 @@ async function uploadFolderFiles(items: FolderFile[]) {
   }
   const totalBytes = accepted.reduce((sum, item) => sum + item.file.size, 0);
   if (totalBytes > MAX_FOLDER_BYTES) {
-    ElMessage.error('文件夹总大小不能超过 300MB，请分批导入');
+    ElMessage.error('文件夹总大小不能超过 200MB，请分批导入');
+    return;
+  }
+  const oversized = accepted.filter((item) => item.file.size > MAX_FILE_BYTES);
+  if (oversized.length > 0) {
+    ElMessage.error(
+      `有 ${oversized.length} 个文件超过单文件 50MB：${oversized.slice(0, 3).map((item) => item.file.name).join('、')}`,
+    );
     return;
   }
 
@@ -578,7 +605,7 @@ onBeforeUnmount(() => {
           >
             <el-icon class="uploader-icon"><UploadFilled /></el-icon>
             <div class="uploader-text">拖拽文件到此处，或<em>点击选择</em></div>
-            <div class="uploader-hint">PDF / Word / TXT / Markdown，单文件不超过 20 MB</div>
+            <div class="uploader-hint">PDF / Word / TXT / Markdown，单文件不超过 50 MB、单次最多 50 个文件 / 200 MB</div>
           </el-upload>
 
           <input

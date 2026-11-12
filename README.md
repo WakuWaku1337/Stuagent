@@ -28,7 +28,7 @@
 | 检索 | Milvus Standalone（Dense + 原生 BM25）→ RRF → Cross-Encoder |
 | 文档解析 | pdfjs-dist、mammoth、word-extractor；扫描件走 Docling |
 | 语音 | sherpa-onnx Paraformer（ASR）+ 浏览器/服务端 TTS |
-| 可视化 | Three.js、function-plot、3Dmol、内联 SVG |
+| 可视化 | `GET/POST /api/visualize`、`GET/DELETE /api/visualize/:id`、`POST /api/visualize/generate`、`/api/courseware/:id` |
 
 ## 环境要求
 
@@ -102,9 +102,16 @@ npm run dev                # server 3000 + web 5173
 | `EMBEDDING_MODEL` | Embedding 模型，默认 `text-embedding-v4` |
 | `RERANK_MODEL` | Cross-Encoder 模型，默认 `gte-rerank-v2` |
 | `LLM_OCR_MODEL` | 图片 OCR 兜底模型（默认复用当前 Provider 的视觉模型） |
-| `LLM_VISION=0/1` | 覆盖视觉能力判断 |
+| `LLM_VISION` | `0/1` 覆盖视觉能力判断 |
 | `MILVUS_ADDRESS` | 默认 `localhost:19530` |
+| `MILVUS_USERNAME` / `MILVUS_PASSWORD` / `MILVUS_TOKEN` | Milvus 认证；本地默认无认证，三者按部署实际填写 |
+| `MILVUS_TIMEOUT_MS` | Milvus 调用超时，默认 15000 |
+| `RAG_TOP_K` / `RAG_CANDIDATE_K` / `RAG_RECALL_LIMIT` | 检索条数、精排候选与召回上限，默认 5 / 30 / 50 |
+| `RAG_TIMEOUT_MS` / `RAG_RETRY_MAX` | Embedding/Rerank 超时与重试，默认 15000 / 2 |
+| `FAST_MODEL_ID` | 快模型 ID；仅用于 `routing` 等轻量场景，空=关闭 |
 | `DOCLING_URL` | 默认 `http://localhost:5001` |
+| `EDUPI_SETTINGS_SECRET` | 设置与模型密钥的加密主密钥；生产必须显式配置并备份 |
+| `TTS_BASE_URL` / `TTS_API_KEY` / `TTS_MODEL` / `TTS_VOICE` | 服务端 TTS（OpenAI 兼容 `/audio/speech`）；前两项不配置时前端使用浏览器 `speechSynthesis`；`TTS_API_KEY` 缺省复用 `LLM_API_KEY`，`TTS_VOICE` 默认 `alloy` |
 
 ### 账号
 
@@ -112,57 +119,126 @@ npm run dev                # server 3000 + web 5173
 | --- | --- | --- |
 | `AUTH_ENABLED` | 1 | 关闭仅限隔离测试，生产禁止 |
 | `REGISTRATION_OPEN` | 1 | 公开注册开关 |
+| `REGISTER_MAX_PER_HOUR` | 10 | 每 IP 每小时注册上限 |
 | `AUTH_BOOTSTRAP` | 0 | 允许本机首次注册成为管理员 |
+| `BOOTSTRAP_LOCAL_ONLY` | 1 | 首个管理员仅连接层本机可创建；带转发头直接拒绝 |
+| `CSRF_ENABLED` | 1 | 非幂等请求同源 Origin/Referer 校验 |
+| `CSRF_ALLOWED_ORIGINS` | 空 | 额外可信来源白名单（逗号分隔） |
+| `MCP_CONFIRM_SIDE_EFFECTS` | 1 | 副作用工具需在管理页确认后才可调用 |
+| `DOCUMENT_PII_REDACT` | 0 | 切片前脱敏电话/邮箱等 PII；开启后引用不可回查原文 |
+| `TRACE_LOG` | 0 | 输出带 `trace_id` 的链路日志，入参出参先脱敏 |
 | `SESSION_TTL_DAYS` / `SESSION_ABSOLUTE_DAYS` | 7 / 30 | 会话空闲/绝对有效期 |
+| `SESSION_MAX_PER_USER` | 10 | 单账号同时保留的有效会话数 |
 | `COOKIE_SECURE` | auto | HTTPS 下设置 Secure Cookie |
 | `TRUST_PROXY` | 1 | 信任反向代理转发头 |
 | `LOGIN_MAX_FAILURES` / `LOGIN_LOCK_MIN` | 5 / 15 | 登录失败锁定 |
+| `LOGIN_WINDOW_MIN` | 15 | 登录失败统计窗口（分钟） |
 | `ANSWER_CACHE_TTL_MIN` | 60 | 精确答案缓存，0 关闭 |
-| `RAG_CACHE_TTL_MIN` / `RAG_CACHE_THRESHOLD` | 10 / 0.96 | 检索语义缓存 |
+| `RAG_CACHE_TTL_MIN` / `RAG_CACHE_THRESHOLD` / `RAG_CACHE_MAX` | 10 / 0.96 / 80 | 检索结果缓存 TTL、相似度阈值与条数上限 |
 | `EMBEDDING_CACHE_DAYS` | 30 | embedding 缓存保留天数 |
-| `CHAT_HISTORY_LIMIT` | 16 | 回放历史条数 |
+| `CHAT_HISTORY_LIMIT` / `HISTORY_ITEM_MAX_CHARS` | 16 / 6000 | 回放历史条数与单条截断长度 |
 | `RERANK_MIN_QUERY_CHARS` | 16 | 短查询跳过 Cross-Encoder |
 | `ROUTE_LLM_MIN_CHARS` | 24 | 短问题跳过路由模型 |
+
+### 有界自主与容错
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `AGENT_MAX_TOOL_STEPS` | 10 | 单次对话工具调用步数上限，0=不限 |
+| `AGENT_WALL_CLOCK_MS` | 180000 | 单次对话墙钟上限，0=不限 |
+| `AGENT_TOKEN_BUDGET` | 0 | token 预算，0=不限 |
+| `TASK_TIMEOUT_MS` | 180000 | 后台任务 watchdog 超时 |
+| `TASK_RETRY_MAX` | 3 | 后台任务失败重试次数 |
+| `DAILY_PRACTICE_COUNT` | 5 | 每日练习题目数，夹取 3–10 |
+| `LLM_KEY_MAX_ATTEMPTS` | 3 | 单次请求最多轮换的密钥数 |
+| `TTS_DEFAULT_VOLUME` | 1 | TTS 默认音量 0–1；客户端应用参数，服务端仅校验与回显，不送入 /audio/speech（OpenAI 兼容接口无标准音量参数），实际音量由浏览器 Audio.volume / SpeechSynthesisUtterance.volume 应用 |
+| `SSE_RETRY_MAX`（前端 `VITE_SSE_RETRY_MAX`） | 2 | 前端 SSE 未收到任何事件时的重连次数，0=关闭 |
+| `EVAL_ENABLE_ADVANCED` | 0 | 输出 Precision@K / nDCG@K 等高级评测指标 |
 
 ### 存储与扫描件
 
 | 变量 | 说明 |
 | --- | --- |
 | `EDU_DATA_DIR` / `EDU_UPLOADS_DIR` | 数据目录与上传目录 |
-| `STORAGE_QUOTA_MB` / `STORAGE_RETENTION_DAYS` / `STORAGE_CLEANUP_HOURS` | 存储配额与孤儿清理 |
-| `DOCLING_OCR_ENGINE` | `auto` / `docling` / `docling+vision` |
-| `DOCLING_TIMEOUT_MS` / `DOCLING_POLL_MS` | Docling 超时与轮询 |
-| `DOCLING_FORMULA_ENRICHMENT=1` | 启用 Docling 公式 LaTeX（CPU 很慢，默认关闭） |
+| `STORAGE_QUOTA_MB` / `STORAGE_RETENTION_DAYS` / `STORAGE_CLEANUP_HOURS` | 存储配额（默认 1024MB）、保留天数（30）与孤儿清理周期（24h） |
+| `MCP_ALLOWED_HOSTS` | 远程 MCP 主机白名单（逗号分隔，支持 `*.example.com`）；空=不限制，仅允许 http/https |
+| `OCR_ENGINE` | 应用侧 OCR 路径：`auto` / `docling` / `docling+vision` / `vision`，默认 `auto` |
+| `OCR_TIMEOUT_MS` | 单篇 OCR 超时，默认 180000（夹取 30–600 秒） |
+| `DOCLING_OCR_ENGINE` | 仅透传给 docling-serve 的 `ocr_engine` 字段（默认 `auto`），**不是**应用侧模式开关 |
+| `DOCLING_TIMEOUT_MS` / `DOCLING_POLL_MS` | Docling 转换超时（默认 30 分钟）与轮询间隔（默认 1500ms） |
+| `DOCLING_FORMULA_ENRICHMENT` | `1` 时启用 Docling 公式 LaTeX（CPU 很慢，默认关闭） |
 | `OCR_CONFIDENCE_THRESHOLD` | 待校对阈值，默认 0.8 |
 | `OCR_VISION_FORMULA_MIN_MARKERS` | 公式占位达到该数量的页面走视觉增强，默认 10，0 关闭 |
 | `OCR_DPI` | 扫描页渲染 DPI，默认 200 |
 
+### 实现口径说明（v0.31）
+
+- **CSRF / 本机 bootstrap**：`server/src/auth/csrf.ts` 挂在 `/api/*`，非幂等请求校验 Origin/Referer；首个管理员用连接层 loopback 判定，带转发头直接拒绝；启用 `BOOTSTRAP_LOCAL_ONLY=0` 可关闭。
+- **MCP 配置期确认**：无 `readOnlyHint` 即视为副作用，未确认返回 `MCP_CONFIRMATION_REQUIRED`；升级时对存量已授权工具执行 `node --import jiti/register scripts/migrate-mcp-confirmations.ts`（默认 dry-run，核对清单后加 `--apply`）。
+- **SSE 幂等重发**：前端每次发送生成 `clientRequestId`，重发复用；服务端 `server/src/chat/idempotency.ts` 按 `(learner_id, clientRequestId)` 去重，命中已完成记录直接重放，处理中返回 409；去重窗口 5 分钟。
+- **有界自主**：`server/src/pi.ts` 用 SDK 事件 `tool_execution_start`（已在 `node_modules/@earendil-works/pi-agent-core/dist/types.d.ts` 核实）计数实现 `AGENT_MAX_TOOL_STEPS=10`，配合 `AGENT_WALL_CLOCK_MS`、`AGENT_TOKEN_BUDGET` 与 `incomplete` 人工接管点。
+- **检索容错**：`server/src/rag/resilience.ts` 提供显式超时 + 指数退避抖动重试；Milvus 客户端带 `timeout`/`maxRetries`；rerank 失败降级 RRF 粗排。
+- **后台任务**：`server/src/tasks/queue.ts` watchdog 用 `AbortController` 真正中止，`signal` 已贯穿 quiz 与 analysis；`TASK_RETRY_MAX` 控制失败重试（指数退避 + 抖动）。
+- **可观测范围**：`trace_id` 进入 SSE 事件、`usage_records.trace_id` 与可选 stdout（`TRACE_LOG=1`，入参出参脱敏）；**无独立 span/链路存储、无跨服务传播、无可视化查询**。
+- **错误响应**：新增与关键路径返回 `{code, error, message}` 双写；历史校验分支仍为 `{ error }` 单写，前端统一按 `error ?? message` 兼容。
+- **评测口径**：`eval-rag.ts` 已实现 Hit@1/3/5、Recall@5、MRR、P50/P95 及高级指标 Precision@5、nDCG@5、引用命中率(Citation Precision@5)；`引用正确率` 为答案级判定，缺 `expected_citations` 与生成答案标注时输出「不可计算」，有标注时仅输出**检索级代理**并明确标注；标注缺失不算失败（退出码 0）。四方案离线对比未实现。
+- **工程配置**：`server/tsconfig.json` 启用 `allowImportingTsExtensions`（仓库全部使用 `.ts` 后缀导入，避免 TS5097），`noEmit: true` 必须保留；仅影响 `npx tsc --noEmit` 门禁，运行时由 jiti 加载不受影响。
+- **连接池**：依赖 Node 原生 fetch 的 undici keep-alive 默认行为，未引入显式连接池；工具并行调用未实现。
+
 ## 数据与检索
 
 - 文档切片保留章节路径与页码，引用可回查原文；扫描件由 Docling 输出逐页 Markdown，低置信/公式密集页可用视觉模型增强。
+- 开启 `DOCUMENT_PII_REDACT=1` 时切片只保留脱敏文本，引用将无法回查原文；默认关闭。
 - 扫描件异步执行，资料库显示进度；低置信页面提供原文图与 Markdown 对照校对，校对后重新切片入库。
 - 每个账号的向量写入独立 Milvus collection；资料、媒体、任务事件与用量都按账号隔离。
 - 长期记忆同时镜像到 `data/memory/<learner_id>/`；旧版单文件 HTML 课件保留只读兼容。
+- 上传限制：单文件 50MB、单次最多 50 个文件、单次总大小 200MB；前端提前校验，后端唯一来源为 `server/src/documents/limits.ts`。上传界面只显示状态与 OCR 进度，不显示浏览器上传进度条。
+- MCP 密钥边界：`server/data/pi-agent/mcp.json` 只同步命令/URL/工具开关，不写解密后的 env/headers；实际调用由服务端从加密 DB 解密后建立连接。数据库加密不等于所有落盘副本都加密。
 
 ## 主要 API
+
+> 下表为主要 API 摘要，非完整清单；完整路由以 `server/src/routes` 为准。
 
 | 分组 | 路径 |
 | --- | --- |
 | 认证 | `POST /api/auth/register`、`login`、`logout`；`GET /api/auth/me`；`PUT /api/auth/password`；`GET /api/auth/sessions` |
 | 管理 | `/api/admin/users`、`/api/admin/users/:id`、`/reset-password`、`/api/admin/audit`、`/api/admin/system-check` |
-| 对话 | `POST /api/chat`；`POST /api/conversations/:id/messages`；`GET/POST /api/conversations` |
-| 资料 | `POST/GET /api/documents`、`/api/documents/:id`、`/ocr`、`/reparse`、`/index`；`POST /api/knowledge/search` |
+| 对话 | `POST /api/chat`（支持可选 `clientRequestId` 幂等键）；`POST /api/conversations/:id/messages`；`GET/POST /api/conversations` |
+| 资料 | `POST/GET /api/documents`、`POST /api/documents/batch`、`/api/documents/:id`；OCR：`GET /api/documents/:id/ocr`、`GET .../ocr/pages/:page/image`、`PUT .../ocr/pages/:page`、`POST .../ocr/confirm`、`POST .../ocr/retry`；`/reparse`、`/index`；`POST /api/knowledge/search` |
 | 学习 | `/api/quiz/*`、`/api/wrongbook/*`、`/api/mastery`、`/api/memory/*`、`/api/plan/*`、`/api/daily/*` |
 | 考试 | `POST /api/reviews/recognize`、`/api/reviews/:id/analyze`；`GET /api/reviews`、`/compare` |
 | 媒体/语音 | `/api/media/upload`、`/api/media/:id`、`/api/media/storage`、`/api/asr`、`/api/tts` |
-| 可视化 | `GET/POST /api/visualize`、`POST /api/visualize/generate`、`/api/courseware/:id` |
-| MCP | `/api/mcp/servers`、`/api/mcp/tools`、`/api/mcp/servers/:id/test` |
-| 设置/用量 | `/api/settings/*`、`/api/usage/summary`、`/daily`、`/cost`、`/export` |
-| 任务 | `POST/GET /api/tasks`、`/api/tasks/:id`；WebSocket `/ws` |
+| 可视化 | `GET/POST /api/visualize`、`GET/DELETE /api/visualize/:id`、`POST /api/visualize/generate`、`/api/courseware/:id` |
+| MCP | `/api/mcp/servers`、`/api/mcp/tools`、`/api/mcp/servers/:id/test`；工具启停 `PUT /api/mcp/servers/:id/tools/:toolName`；副作用确认 `POST .../tools/:toolName/confirm` |
+| 设置/用量 | `/api/settings/model`、`/api/settings/generation`、`/api/settings/keys`、`/api/settings/*`；`/api/usage/summary`、`/daily`、`/cost`、`/export` |
+| 任务 | `POST/GET /api/tasks`、`/api/tasks/:id`、`POST /api/tasks/:id/cancel`；WebSocket `/ws` |
 
 ## 页面
 
-`/` 学习台、`/plan` 学习计划、`/chat` 对话、`/documents` 资料库、`/quiz` 智能出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模拟考试、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展、`/admin` 账号管理、`/account` 账号设置。
+`/` 学习台、`/plan` 学习计划、`/chat` 对话、`/documents` 资料库、`/quiz` 智能出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模拟考试、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展、`/admin` 账号管理、`/account` 账号设置、`/privacy` 隐私政策、`/terms` 用户协议。
+
+> `/privacy` 与 `/terms` 当前为占位页，正文与联系方式待运营方提供（上线阻断项）。
+
+## 本次整改新增模块
+
+- `server/src/config.ts`
+- `server/src/auth/csrf.ts`
+- `server/src/trace.ts`
+- `server/src/rag/resilience.ts`
+- `server/src/chat/idempotency.ts`
+- `server/src/mcp/backfill.ts`
+- `server/scripts/lib/same-origin-fetch.ts`
+- `server/scripts/check-resilience.ts`
+- `server/scripts/check-sse-idempotency.ts`
+- `server/scripts/check-config-keys.ts`
+- `server/scripts/migrate-mcp-confirmations.ts`
+- `server/src/documents/limits.ts`
+- `server/scripts/check-exam-isolation.ts`
+- `server/scripts/check-api-docs.ts`
+- `server/scripts/check-docs.ts`
+- `server/scripts/repair-exam-question-owner.ts`
+- `web/src/views/PrivacyView.vue`
+- `web/src/views/TermsView.vue`
 
 ## 验证
 
@@ -176,9 +252,20 @@ node --import jiti/register scripts/eval-rag.ts            # RAG 检索指标与
 node --import jiti/register scripts/check-docling.ts       # Docling 解析
 node --import jiti/register scripts/check-ocr.ts           # 扫描件 OCR 与校对
 node --import jiti/register scripts/check-visualize.ts     # 可视化建模
+node --import jiti/register scripts/check-security.ts      # PII / 注入 / 切片脱敏
+node --import jiti/register scripts/check-mcp.ts           # MCP 授权与副作用确认
+node --import jiti/register scripts/check-sse-idempotency.ts  # SSE 幂等
+node --import jiti/register scripts/check-config-keys.ts      # 配置键三方一致（全 src 扫描）
+node --import jiti/register scripts/check-api-docs.ts         # 关键路由与 README 同步
+node --import jiti/register scripts/check-exam-isolation.ts   # 考试题库 A/B 隔离
+node --import jiti/register scripts/check-docs.ts             # 文档口径一致性
+node --import jiti/register scripts/check-resilience.ts       # 超时/重试/中止（含 quiz）
+node --import jiti/register scripts/check-voice.ts         # ASR / TTS
 ```
 
 对开启认证的服务运行回归时设置 `AUTH_USER` / `AUTH_PASSWORD`；隔离测试服务可用 `AUTH_ENABLED=0`。
+
+MCP 存量授权回填：升级后执行 `node --import jiti/register scripts/migrate-mcp-confirmations.ts`（默认 dry-run，核对清单后加 `--apply`）。
 
 ## 生产与 Docker
 
@@ -202,7 +289,18 @@ APP_PORT=3100 docker compose -f docker/docker-compose.yml up -d edu-agent
 
 ## 已知限制与后续
 
-- S23 仍未完成独立“快模型”分级路由与并发压测；当前已落地 embedding/检索/答案缓存、短问题快路径与 TTFT/P95 小样本压测。
-- 部分非核心体验仍在后续：MCP 断线重连/日志/推荐模板、复盘报告导出、TTS 音量/逐句跟读、可视化动画与联动高亮。
+- 快模型分级路由已提供 `FAST_MODEL_ID`（默认关闭，仅作用于轻量路由场景）；并发压测仍待补。
+- MCP 副作用工具采用配置期显式授权，不在对话中途弹窗确认。
+- 部分非核心体验仍在后续：MCP 断线重连/日志/推荐模板、复盘报告导出、可视化动画与联动高亮。
+- 复盘当前只支持单文件图片或 PDF；多图自动拼接、纠偏、分页、确定性自动判分未实现；统计只到题型与知识点。
+- 可视化未实现：函数极值/渐近线/切点/对称轴、分段函数绘制、逐步辅助线与预置生物 3D 模型库。
+- 语音：ASR 仅支持 16-bit PCM WAV（sherpa-onnx Paraformer），云端 ASR、edge-tts / piper 与音频统一入库未实现；播放控制只有停止。
+- 上传：单文件 50MB、单次最多 50 个文件、单次总大小 200MB；不显示浏览器上传进度条。
+- MCP：`mcp.json` 不含密钥，Pi 原生 MCP 需要 env/headers 的场景请使用管理页配置。
 - 解题视频按设计不自研渲染管线，后续接外部 MCP。
 - 扫描件 OCR 依赖 docling-serve；公式增强默认关闭，Docling 转换中途重启会重新提交。
+- `/privacy`、`/terms` 为占位视图，正文、备案号、联系方式待运营方提供，登记为上线阻断（Q6）。
+- 反代（Caddy/Nginx）、HTTPS 域名与每日备份调度未定，B4 未开工（Q5）。
+- `edu_questions` 集合、Router/Worker 运行时、edulab 工程移植、GeoGebra 按 Q4 兜底不实现，已在设计文档 v0.31 标注。
+- 评测集仍为 8 题小样本，人工标注（`relevant_sources`/`answer`/`expected_citations`）为独立数据任务。
+- 引用正确率答案级判定不可计算。

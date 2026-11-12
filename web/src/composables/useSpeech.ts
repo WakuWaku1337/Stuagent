@@ -4,14 +4,47 @@ import { toSpeechText } from '../utils/speech';
 
 const VOICE_KEY = 'edupi.tts.voice';
 const RATE_KEY = 'edupi.tts.rate';
+const VOLUME_KEY = 'edupi.tts.volume';
+const SENTENCE_MAX = 220;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
 function storedRate(): number {
   try {
     const value = Number(localStorage.getItem(RATE_KEY));
-    return Number.isFinite(value) && value > 0 ? Math.min(1.6, Math.max(0.6, value)) : 1;
+    return Number.isFinite(value) && value > 0 ? clamp(value, 0.6, 1.6) : 1;
   } catch {
     return 1;
   }
+}
+
+function storedVolume(): number {
+  try {
+    const value = Number(localStorage.getItem(VOLUME_KEY));
+    return Number.isFinite(value) ? clamp(value, 0, 1) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** 逐句跟读：按句末标点切分，超长句再按窗口切开 */
+function splitSentences(text: string): string[] {
+  const parts = text.match(/[^。！？!?；;\n]+[。！？!?；;]?/g) ?? [text];
+  const sentences: string[] = [];
+  for (const part of parts) {
+    const clean = part.trim();
+    if (!clean) continue;
+    if (clean.length <= SENTENCE_MAX) {
+      sentences.push(clean);
+      continue;
+    }
+    for (let start = 0; start < clean.length; start += SENTENCE_MAX) {
+      sentences.push(clean.slice(start, start + SENTENCE_MAX));
+    }
+  }
+  return sentences.length > 0 ? sentences : [text];
 }
 
 export function useSpeech() {
@@ -25,6 +58,7 @@ export function useSpeech() {
   }
   const voiceURI = ref(storedVoice);
   const rate = ref(storedRate());
+  const volume = ref(storedVolume());
   const speaking = ref(false);
   const speakingKey = ref<string | number | null>(null);
   const error = ref('');
@@ -32,7 +66,6 @@ export function useSpeech() {
 
   let audio: HTMLAudioElement | null = null;
   let session = 0;
-  let watchdog: ReturnType<typeof setTimeout> | undefined;
 
   function defaultVoice(list: SpeechSynthesisVoice[]): string {
     const chinese = list.filter((voice) => voice.lang?.toLowerCase().startsWith('zh'));
@@ -85,71 +118,83 @@ export function useSpeech() {
     ].filter((group) => group.items.length > 0);
   });
 
-  function clearWatchdog() {
-    if (watchdog) clearTimeout(watchdog);
-    watchdog = undefined;
-  }
-
-  function finish(current: number, audioUrl?: string) {
+  function finish(current: number) {
     if (current !== session) return;
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    clearWatchdog();
     speaking.value = false;
     speakingKey.value = null;
     audio = null;
   }
 
-  function fail(current: number, message: string) {
-    if (current !== session) return;
-    error.value = message;
-    finish(current);
-  }
-
-  function speakBrowser(text: string, current: number) {
-    if (current !== session) return;
-    if (!supported.value) {
-      fail(current, '当前浏览器不支持语音合成');
-      return;
-    }
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voice = voices.value.find((item) => item.voiceURI === voiceURI.value);
-    if (voice) utterance.voice = voice;
-    utterance.lang = voice?.lang || 'zh-CN';
-    utterance.rate = rate.value;
-    utterance.onend = () => finish(current);
-    utterance.onerror = (event) => {
-      const code = (event as SpeechSynthesisErrorEvent).error;
-      if (code !== 'canceled' && code !== 'interrupted') {
-        fail(current, `朗读失败：${code}`);
-      } else {
-        finish(current);
+  function playBrowser(text: string, current: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (current !== session || !supported.value) {
+        resolve(false);
+        return;
       }
-    };
-    try {
-      speechSynthesis.cancel();
-      speechSynthesis.speak(utterance);
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = voices.value.find((item) => item.voiceURI === voiceURI.value);
+      if (voice) utterance.voice = voice;
+      utterance.lang = voice?.lang || 'zh-CN';
+      utterance.rate = rate.value;
+      utterance.volume = volume.value;
+
+      let settled = false;
+      const settle = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ok);
+      };
       const expected = Math.max(6000, (text.length * 260) / rate.value) + 5000;
-      watchdog = setTimeout(() => finish(current), expected);
-    } catch (e) {
-      fail(current, e instanceof Error ? e.message : '朗读失败');
-    }
+      const timer = setTimeout(() => {
+        if (current === session) {
+          try {
+            speechSynthesis.cancel();
+          } catch {
+            // ignore
+          }
+        }
+        settle(false);
+      }, expected);
+
+      utterance.onend = () => settle(true);
+      utterance.onerror = (event) => {
+        const code = (event as SpeechSynthesisErrorEvent).error;
+        if (code !== 'canceled' && code !== 'interrupted' && current === session) {
+          error.value = `朗读失败：${code}`;
+        }
+        settle(false);
+      };
+      try {
+        speechSynthesis.speak(utterance);
+      } catch (e) {
+        if (current === session) error.value = e instanceof Error ? e.message : '朗读失败';
+        settle(false);
+      }
+    });
   }
 
-  function playAudio(url: string, text: string, current: number) {
-    if (current !== session) {
-      URL.revokeObjectURL(url);
-      return;
-    }
-    const element = new Audio(url);
-    audio = element;
-    element.onended = () => finish(current, url);
-    element.onerror = () => {
-      URL.revokeObjectURL(url);
-      if (current === session) speakBrowser(text, current);
-    };
-    void element.play().catch(() => {
-      URL.revokeObjectURL(url);
-      if (current === session) speakBrowser(text, current);
+  function playAudio(url: string, current: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (current !== session) {
+        URL.revokeObjectURL(url);
+        resolve(false);
+        return;
+      }
+      const element = new Audio(url);
+      audio = element;
+      element.volume = volume.value;
+      let settled = false;
+      const settle = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        URL.revokeObjectURL(url);
+        if (audio === element) audio = null;
+        resolve(ok);
+      };
+      element.onended = () => settle(true);
+      element.onerror = () => settle(false);
+      void element.play().catch(() => settle(false));
     });
   }
 
@@ -161,28 +206,38 @@ export function useSpeech() {
     error.value = '';
     speaking.value = true;
     speakingKey.value = key;
-    try {
-      const result = await synthesizeSpeech(plain, rate.value);
-      if (current !== session) {
-        if (result.audioUrl) URL.revokeObjectURL(result.audioUrl);
-        return false;
+
+    void (async () => {
+      for (const sentence of splitSentences(plain)) {
+        if (current !== session) return;
+        let played = false;
+        try {
+          const result = await synthesizeSpeech(sentence, rate.value, volume.value);
+          if (current !== session) {
+            if (result.audioUrl) URL.revokeObjectURL(result.audioUrl);
+            return;
+          }
+          if (result.mode === 'server' && result.audioUrl) {
+            played = await playAudio(result.audioUrl, current);
+          }
+        } catch {
+          // 服务端 TTS 不可用时逐句回退浏览器
+        }
+        if (current !== session) return;
+        if (!played) played = await playBrowser(sentence, current);
+        if (!played && !error.value) {
+          error.value = supported.value ? '朗读失败' : '当前浏览器不支持语音合成';
+        }
+        if (error.value) break;
       }
-      if (result.mode === 'server' && result.audioUrl) {
-        playAudio(result.audioUrl, plain, current);
-      } else {
-        speakBrowser(plain, current);
-      }
-      return true;
-    } catch {
-      if (current !== session) return false;
-      speakBrowser(plain, current);
-      return supported.value;
-    }
+      if (current === session) finish(current);
+    })();
+
+    return true;
   }
 
   function stop() {
     session += 1;
-    clearWatchdog();
     if (supported.value) {
       try {
         speechSynthesis.cancel();
@@ -217,6 +272,13 @@ export function useSpeech() {
       // ignore
     }
   });
+  watch(volume, (value) => {
+    try {
+      localStorage.setItem(VOLUME_KEY, String(value));
+    } catch {
+      // ignore
+    }
+  });
 
   if (supported.value) {
     refreshVoices();
@@ -236,6 +298,7 @@ export function useSpeech() {
     voiceGroups,
     voiceURI,
     rate,
+    volume,
     speaking,
     speakingKey,
     error,

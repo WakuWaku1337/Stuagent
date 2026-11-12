@@ -74,6 +74,7 @@ const {
   voiceGroups: ttsVoiceGroups,
   voiceURI: ttsVoice,
   rate: ttsRate,
+  volume: ttsVolume,
   speaking: ttsSpeaking,
   speakingKey,
   error: speechError,
@@ -444,6 +445,11 @@ onMounted(async () => {
               <span class="tts-value numeric">{{ ttsRate.toFixed(1) }}x</span>
             </div>
             <el-slider v-model="ttsRate" :min="0.6" :max="1.6" :step="0.1" size="small" />
+            <div class="tts-rate">
+              <span class="tts-label">音量</span>
+              <span class="tts-value numeric">{{ Math.round(ttsVolume * 100) }}%</span>
+            </div>
+            <el-slider v-model="ttsVolume" :min="0" :max="1" :step="0.05" size="small" />
             <div class="tts-actions">
               <el-button size="small" @click="previewTts()">试听</el-button>
               <el-button v-if="ttsSpeaking" size="small" text @click="stopSpeech()">停止朗读</el-button>

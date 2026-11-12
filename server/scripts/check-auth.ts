@@ -1,3 +1,5 @@
+import './lib/same-origin-fetch.ts';
+
 const BASE = (process.env.BASE_URL ?? 'http://127.0.0.1:3000').replace(/\/+$/, '');
 const USERNAME = process.env.AUTH_TEST_USER ?? 'admin';
 const PASSWORD = process.env.AUTH_TEST_PASSWORD ?? 'admin12345';
@@ -12,7 +14,11 @@ function cookieFrom(response: Response): string {
   return raw.split(';')[0];
 }
 
-async function req(path: string, init: RequestInit = {}, useCookie = cookie): Promise<{ status: number; body: any }> {
+async function req(
+  path: string,
+  init: RequestInit = {},
+  useCookie = cookie,
+): Promise<{ status: number; body: any; headers: Headers }> {
   const headers = new Headers(init.headers);
   if (init.body) headers.set('content-type', 'application/json');
   if (useCookie) headers.set('cookie', useCookie);
@@ -24,7 +30,7 @@ async function req(path: string, init: RequestInit = {}, useCookie = cookie): Pr
   } catch {
     body = text;
   }
-  return { status: response.status, body };
+  return { status: response.status, body, headers: response.headers };
 }
 
 async function check(name: string, fn: () => Promise<boolean | string>): Promise<void> {
@@ -51,6 +57,21 @@ await check('bootstrap config', async () => {
   const { status, body } = await req('/api/auth/bootstrap', {}, '');
   return status === 200 && body.authEnabled === true && typeof body.initialized === 'boolean';
 });
+
+if ((await req('/api/auth/bootstrap', {}, '')).body?.initialized === false) {
+  await check('bootstrap rejects forwarded request', async () => {
+    const { status, body } = await req(
+      '/api/auth/register',
+      {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '8.8.8.8' },
+        body: JSON.stringify({ username: `boot_${Date.now().toString(36)}`, password: 'secret123' }),
+      },
+      '',
+    );
+    return status === 403 && body?.code === 'BOOTSTRAP_LOCAL_ONLY';
+  });
+}
 
 await check('unauthenticated API returns 401', async () => {
   const { status } = await req('/api/model', {}, '');
@@ -171,16 +192,45 @@ if (bootstrap.body?.registrationOpen === true) {
 }
 
 await check('login rate limit', async () => {
-  let last = 0;
+  let last: { status: number; headers: Headers } = { status: 0, headers: new Headers() };
   for (let i = 0; i < 6; i += 1) {
-    const { status } = await req(
+    last = await req(
       '/api/auth/login',
       { method: 'POST', body: JSON.stringify({ username: 'nobody_rate_limit', password: 'wrong-password' }) },
       '',
     );
-    last = status;
   }
-  return last === 429;
+  const retryAfter = Number(last.headers.get('retry-after') ?? 0);
+  return last.status === 429 && retryAfter > 0 ? `Retry-After ${retryAfter}s` : false;
+});
+
+await check('csrf rejects cross-site write', async () => {
+  const { status, body } = await req('/api/auth/logout', {
+    method: 'POST',
+    headers: { origin: 'https://evil.example' },
+  });
+  return status === 403 && body?.code === 'CSRF_REJECTED';
+});
+
+await check('csrf rejects null origin', async () => {
+  const { status, body } = await req('/api/auth/logout', {
+    method: 'POST',
+    headers: { origin: 'null' },
+  });
+  return status === 403 && body?.code === 'CSRF_REJECTED';
+});
+
+await check('csrf rejects write without origin', async () => {
+  const { status, body } = await req('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'x-edupi-no-origin': '1' },
+  });
+  return status === 403 && body?.code === 'CSRF_REJECTED';
+});
+
+await check('csrf allows same-origin write', async () => {
+  const { status } = await req('/api/auth/login', { method: 'POST', body: '{}' }, '');
+  return status === 400;
 });
 
 await check('logout admin session', async () => {

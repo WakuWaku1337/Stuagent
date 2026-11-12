@@ -1,4 +1,6 @@
 import type { ParsedBlock } from './parsers.ts';
+import { documentPiiRedactEnabled } from '../config.ts';
+import { redactPII } from '../security/guard.ts';
 
 export interface ChunkDraft {
   text: string;
@@ -12,6 +14,10 @@ const OVERLAP = 80;
 
 /** 语义优先：段落累计到 500-800 字一片，相邻片重叠 80 字；超长段落用窗口切分 */
 export function chunkBlocks(blocks: ParsedBlock[]): ChunkDraft[] {
+  // 开启脱敏后切片只保留脱敏文本，引用无法回查原文（默认关闭）
+  const source = documentPiiRedactEnabled()
+    ? blocks.map((block) => ({ ...block, text: redactPII(block.text).text }))
+    : blocks;
   const chunks: ChunkDraft[] = [];
   let buffer = '';
   let chapter = '';
@@ -23,7 +29,7 @@ export function chunkBlocks(blocks: ParsedBlock[]): ChunkDraft[] {
     buffer = '';
   };
 
-  for (const block of blocks) {
+  for (const block of source) {
     const paragraphs = block.text
       .split(/\n+/)
       .map((p) => p.trim())
