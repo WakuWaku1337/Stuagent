@@ -1,10 +1,24 @@
 # 智学 实施进度
 
-当前阶段：文档—代码一致性整改（2026-11-13）已完成 B1 安全修复、B2 契约修复与 B3 文档对齐；公式渲染与函数可视化修复已完成（共享表达式内核、函数复合、cases 分段、Math 保护层）；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
+当前阶段：多用户上线加固（2026-11-13，PR #2）已完成并部署到 `8.148.185.212`；文档—代码一致性整改、公式渲染与函数可视化修复均已完成；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
 
-公开注册：S33 数据隔离完成后已恢复默认开放（`REGISTRATION_OPEN=1`）；如需收紧设置 `REGISTRATION_OPEN=0`
+公开注册：开发默认开放（`REGISTRATION_OPEN=1`）；生产 `8.148.185.212` 已设 `REGISTRATION_OPEN=0`，由管理员建号
 
 密码策略：注册、改密、管理员重置统一放宽为 6–128 位；README 已按 v0.30 重写（2026-11-08）
+
+## 2026-11-13 · 多用户上线加固（PR #2）
+
+- 目标：单台服务器、单实例 Node + SQLite 支撑多用户；不引入多实例/Postgres/Redis。
+- 施工文档：`施工文档-多用户上线加固.md`。
+- 会话一致性：同一会话固定 provider key；失败切换时只丢弃该角色在该会话下的旧 session，从 DB 历史重建，修复多 key 上下文错乱。新增 `chat/key-selection.ts`、`check-session-pinning.ts`。
+- 会话互斥：`chat/lock.ts` + `pi.ts` 双层加锁；同会话并发请求返回 `409 CONVERSATION_BUSY`，且不写第二条用户消息。新增 `check-conversation-lock.ts`。
+- 并发门限：`chat/gate.ts` 全局默认 6、单用户默认 2、最长排队 15s；超限返回 `429 CHAT_BUSY`，handler 在写消息前快速拒绝。新增 `check-chat-gate.ts`。
+- 缓存与维护：Pi `AgentSession` 改为 LRU + 空闲 TTL（默认 300 条 / 60 分钟）；`maintenance.ts` 周期清理 `chat_idempotency`、`answer_cache`、已结束 `tasks`；SQLite 增加 `busy_timeout=5000`。
+- 部署：compose 增加 `/health` healthcheck 与 10m×3 日志轮转；Nginx 上传上限 210m、关闭请求缓冲；`deploy.sh` 排除 `server/.env`，避免本地配置覆盖生产。
+- 生产环境：`8.148.185.212` 已补齐 `REGISTRATION_OPEN=0`、`EDUPI_SETTINGS_SECRET`、`AGENT_*`、维护周期等变量；`.env` 权限 600；容器状态 `healthy`。
+- 验证：`npm run check:multiuser:all --workspace server` ALL PASS（固定 key、409、429、LRU/TTL、维护清理、并发排队）；生产容器内同套校验 ALL PASS；`/health` 直连与 Nginx 均 200；数据库 `integrity_check=ok`；真实模型调用返回正常。
+- 备份：部署前 SQLite 18M + uploads 74M 已备份到 `/app/data/backups/`；`.env` 备份在 `/opt/edu-agent-backups/`（含 `EDUPI_SETTINGS_SECRET`，需异地保存）。
+- 剩余：HTTPS 域名证书未配置（当前 HTTP，属于真实多用户上线阻断项）；公开注册已关闭，需管理员建号；50+ 用户压力测试、每日配额、账号注销/数据清除仍未做。
 
 ## 2026-11-13 · 公式渲染与函数可视化修复
 
@@ -17,7 +31,7 @@
 ## 2026-11-13 · 文档—代码一致性整改（依据《施工方案-文档代码一致性整改.md》v0.1）
 
 - B1 安全与隔离：考试复盘写题库补 `learner_id`（新增 `check-exam-isolation.ts`，ALL PASS）；主对话按 `LLM_KEY_MAX_ATTEMPTS` 截断候选；stdio MCP 只继承最小运行环境；`mcp.json` 不再落解密 env/headers；远程 MCP 只允许 http/https，并新增 `MCP_ALLOWED_HOSTS`。
-- B2 契约：`OCR_ENGINE`（应用侧）与 `DOCLING_OCR_ENGINE`（透传）口径拆分；上传限制统一为单文件 50MB / 单批 50 个 / 单批 200MB（`documents/limits.ts`）；上传错误详情收进 `detail`；`check-config-keys.ts` 扩展为全 `server/src` 扫描（72 登记键 / 79 代码键 / 3 豁免键）；新增 `check-api-docs.ts`。
+- B2 契约：`OCR_ENGINE`（应用侧）与 `DOCLING_OCR_ENGINE`（透传）口径拆分；上传限制统一为单文件 50MB / 单批 50 个 / 单批 200MB（`documents/limits.ts`）；上传错误详情收进 `detail`；`check-config-keys.ts` 以 README 配置节为登记源并扫描全 `server/src`（85 登记键 / 87 代码键 / 3 豁免键）；新增 `check-api-docs.ts`。
 - B3 文档：设计文档 5.6、6.3、6.5、6.7、6.10、6.12、6.14、6.15、7.1、7.3 按代码修订；未实现项统一标注【未实现，v0.31】；README 配置表与 API 摘要同步。
 - 数据修复：新增 `repair-exam-question-owner.ts`，默认 dry-run；历史题目归属修复尚未执行 `--apply`。
 - 未实现（明确保留）：复盘多图/导出、MCP 重连/日志/模板、可视化动画、答案语义缓存、历史摘要、工具并行、音频统一入库。

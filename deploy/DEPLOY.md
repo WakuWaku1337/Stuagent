@@ -98,6 +98,18 @@ docker compose -f docker-compose.cloud.yml logs -f edu-agent
 - **占位页**：`/privacy`、`/terms` 仍为占位视图（需运营提供正文与备案号，属上线阻断项）。
 - **公开注册**：已默认建议关闭；如需开放，将 `REGISTRATION_OPEN=1` 并考虑限流与风控。
 
+### 多用户运行检查（v0.32）
+
+- 只运行一个 `edu-agent` 容器，不要把同一个 `app_data` 卷挂给多个应用容器。
+- `server/.env` 权限必须为 `600`；`EDUPI_SETTINGS_SECRET` 单独异地备份。
+- 建议配置：`REGISTRATION_OPEN=0`、`AGENT_MAX_CONCURRENT=6`、`AGENT_MAX_CONCURRENT_PER_USER=2`、`AGENT_QUEUE_WAIT_MS=15000`、`AGENT_SESSION_MAX=300`、`AGENT_SESSION_TTL_MIN=60`。
+- 部署后确认 `docker compose ps` 显示 `healthy`，并执行：
+  ```bash
+  docker exec -w /app/server edu-agent npm run check:multiuser:all
+  ```
+- 浏览器/接口验收：同会话并发返回 409；单用户超并发返回 429；双 key 连续多轮固定同一 key；`/health` 直连与 Nginx 均 200。
+- 当前服务器仍为 HTTP；HTTPS 未完成前只适合邀请制小范围使用。
+
 ## 八、故障排查
 
 | 现象 | 排查 |
