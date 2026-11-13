@@ -3,13 +3,16 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import renderMathInElement from 'katex/contrib/auto-render';
+import { protectMath, restoreMath } from '../utils/math';
 
 const props = defineProps<{ text: string }>();
 const el = ref<HTMLElement>();
 
-const html = computed(() =>
-  DOMPurify.sanitize(marked.parse(props.text, { async: false }) as string),
-);
+const prepared = computed(() => protectMath(props.text));
+const html = computed(() => {
+  const parsed = marked.parse(prepared.value.text, { async: false }) as string;
+  return DOMPurify.sanitize(restoreMath(parsed, prepared.value.blocks, prepared.value.tokenPrefix));
+});
 
 watch(
   () => props.text,
@@ -19,12 +22,17 @@ watch(
       renderMathInElement(el.value, {
         delimiters: [
           { left: '$$', right: '$$', display: true },
-          { left: '\\[', right: '\\]', display: true },
-          { left: '\\(', right: '\\)', display: false },
           { left: '$', right: '$', display: false },
         ],
         throwOnError: false,
       });
+      const errors = el.value.querySelectorAll('.katex-error');
+      if (errors.length > 0) {
+        console.warn(
+          '[math] KaTeX errors:',
+          [...errors].map((node) => node.getAttribute('title') ?? node.textContent ?? ''),
+        );
+      }
     }),
   { immediate: true },
 );

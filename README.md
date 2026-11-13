@@ -150,7 +150,12 @@ npm run dev                # server 3000 + web 5173
 | `TASK_TIMEOUT_MS` | 180000 | 后台任务 watchdog 超时 |
 | `TASK_RETRY_MAX` | 3 | 后台任务失败重试次数 |
 | `DAILY_PRACTICE_COUNT` | 5 | 每日练习题目数，夹取 3–10 |
-| `LLM_KEY_MAX_ATTEMPTS` | 3 | 单次请求最多轮换的密钥数 |
+| `LLM_KEY_MAX_ATTEMPTS` | 3 | 单次请求最多轮换的密钥数；同一会话正常路径固定一个 key |
+| `AGENT_SESSION_MAX` / `AGENT_SESSION_TTL_MIN` | 300 / 60 | Pi 会话缓存条数上限与空闲过期分钟数，0=不限制 |
+| `AGENT_MAX_CONCURRENT` / `AGENT_MAX_CONCURRENT_PER_USER` | 6 / 2 | 聊天全局/单用户并发上限，0=不限制 |
+| `AGENT_QUEUE_WAIT_MS` | 15000 | 全局并发满时的最长排队时间，超时返回 429 |
+| `MAINTENANCE_INTERVAL_HOURS` | 6 | 运行时表清理周期，0=关闭 |
+| `IDEMPOTENCY_RETENTION_HOURS` / `TASK_RETENTION_DAYS` | 24 / 30 | 幂等记录与已结束任务保留时间 |
 | `TTS_DEFAULT_VOLUME` | 1 | TTS 默认音量 0–1；客户端应用参数，服务端仅校验与回显，不送入 /audio/speech（OpenAI 兼容接口无标准音量参数），实际音量由浏览器 Audio.volume / SpeechSynthesisUtterance.volume 应用 |
 | `SSE_RETRY_MAX`（前端 `VITE_SSE_RETRY_MAX`） | 2 | 前端 SSE 未收到任何事件时的重连次数，0=关闭 |
 | `EVAL_ENABLE_ADVANCED` | 0 | 输出 Precision@K / nDCG@K 等高级评测指标 |
@@ -192,6 +197,7 @@ npm run dev                # server 3000 + web 5173
 - 扫描件异步执行，资料库显示进度；低置信页面提供原文图与 Markdown 对照校对，校对后重新切片入库。
 - 每个账号的向量写入独立 Milvus collection；资料、媒体、任务事件与用量都按账号隔离。
 - 长期记忆同时镜像到 `data/memory/<learner_id>/`；旧版单文件 HTML 课件保留只读兼容。
+- Markdown 渲染先保护 `$...$`/`$$...$$` 再交给 marked，分段函数与 `\\[2pt]` 不再被 Markdown 转义；表达式统一由 `shared/expression.ts` 编译，函数复合与 cases 分段可绘制。
 - 上传限制：单文件 50MB、单次最多 50 个文件、单次总大小 200MB；前端提前校验，后端唯一来源为 `server/src/documents/limits.ts`。上传界面只显示状态与 OCR 进度，不显示浏览器上传进度条。
 - MCP 密钥边界：`server/data/pi-agent/mcp.json` 只同步命令/URL/工具开关，不写解密后的 env/headers；实际调用由服务端从加密 DB 解密后建立连接。数据库加密不等于所有落盘副本都加密。
 
@@ -237,6 +243,9 @@ npm run dev                # server 3000 + web 5173
 - `server/scripts/check-api-docs.ts`
 - `server/scripts/check-docs.ts`
 - `server/scripts/repair-exam-question-owner.ts`
+- `shared/expression.ts`
+- `web/src/utils/math.ts`
+- `server/scripts/check-markdown-math.ts`
 - `web/src/views/PrivacyView.vue`
 - `web/src/views/TermsView.vue`
 
@@ -259,6 +268,7 @@ node --import jiti/register scripts/check-config-keys.ts      # 配置键三方�
 node --import jiti/register scripts/check-api-docs.ts         # 关键路由与 README 同步
 node --import jiti/register scripts/check-exam-isolation.ts   # 考试题库 A/B 隔离
 node --import jiti/register scripts/check-docs.ts             # 文档口径一致性
+node --import jiti/register scripts/check-markdown-math.ts   # Markdown/KaTeX 数学保护
 node --import jiti/register scripts/check-resilience.ts       # 超时/重试/中止（含 quiz）
 node --import jiti/register scripts/check-voice.ts         # ASR / TTS
 ```
@@ -293,7 +303,7 @@ APP_PORT=3100 docker compose -f docker/docker-compose.yml up -d edu-agent
 - MCP 副作用工具采用配置期显式授权，不在对话中途弹窗确认。
 - 部分非核心体验仍在后续：MCP 断线重连/日志/推荐模板、复盘报告导出、可视化动画与联动高亮。
 - 复盘当前只支持单文件图片或 PDF；多图自动拼接、纠偏、分页、确定性自动判分未实现；统计只到题型与知识点。
-- 可视化未实现：函数极值/渐近线/切点/对称轴、分段函数绘制、逐步辅助线与预置生物 3D 模型库。
+- 可视化已支持 `abs`、三角/根式、`f(x)=`/`g(x)=` 定义与复合、`\begin{cases}` 分段函数；未实现极值/渐近线/切点/对称轴、分段函数参与复合、逐步辅助线与预置生物 3D 模型库。
 - 语音：ASR 仅支持 16-bit PCM WAV（sherpa-onnx Paraformer），云端 ASR、edge-tts / piper 与音频统一入库未实现；播放控制只有停止。
 - 上传：单文件 50MB、单次最多 50 个文件、单次总大小 200MB；不显示浏览器上传进度条。
 - MCP：`mcp.json` 不含密钥，Pi 原生 MCP 需要 env/headers 的场景请使用管理页配置。

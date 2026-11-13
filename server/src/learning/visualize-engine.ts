@@ -86,7 +86,7 @@ export function createVisualizeTool() {
     name: 'visualize_generate',
     label: '生成统一可视化',
     description:
-      '画图与交互课件的唯一入口。优先只传 question 与 subject：后端按题目文本实际解析函数、方程、几何点/尺寸、分子式或物理场景并本地建模，不调用对话模型；解析不到具体结构时不硬凑图。需要精确控制时再传 type+spec（spec 可传对象或 JSON 字符串）。function2d 的 expression 支持 abs（|x| 写成 abs(x)），分段函数请合并为单式（3x|x| → 3*x*abs(x)）。不要在回答里手绘 ASCII 图，直接调用本工具。',
+      '画图与交互课件的唯一入口。优先只传 question 与 subject：后端按题目文本实际解析函数、方程、几何点/尺寸、分子式或物理场景并本地建模，不调用对话模型；解析不到具体结构时不硬凑图。需要精确控制时再传 type+spec（spec 可传对象或 JSON 字符串）。function2d 的 expression 支持 abs（|x| 写成 abs(x)）、函数定义与复合（g(x)=...，f(x)=g(x)g(|x|)）以及 \\begin{cases} 分段函数。不要在回答里手绘 ASCII 图，直接调用本工具。',
     parameters: Type.Object({
       question: Type.Optional(Type.String({ description: '题目原文；只传它也能出图' })),
       subject: Type.Optional(Type.String({ description: '学科，如 数学 / 化学 / 物理' })),
@@ -98,7 +98,14 @@ export function createVisualizeTool() {
       const spec = parseSpec(params.spec);
       let visualization: Visualization | null = null;
 
-      if (params.type && spec) {
+      // function2d 有题目原文时优先走本地确定性建模：模型经常把 f(-x) 误写成 f(x)，
+      // 还会带出整块区域填充。只有建模失败时才使用模型自带的 type+spec。
+      if (params.question && params.type === 'function2d') {
+        const modeled = await generateVisualization({ question: params.question, subject: params.subject });
+        if (modeled) visualization = modeled.visualization;
+      }
+
+      if (!visualization && params.type && spec) {
         try {
           visualization = createVisualization({
             type: params.type as VisualizationType,

@@ -10,6 +10,8 @@ const dataDir = process.env.EDU_DATA_DIR?.trim()
 mkdirSync(dataDir, { recursive: true });
 
 export const db = new DatabaseSync(resolve(dataDir, 'edu.db'));
+// 单进程内仍有后台任务与请求并发写；给 SQLite 一个明确的等待窗口
+db.exec('PRAGMA busy_timeout = 5000;');
 
 db.exec(`
   PRAGMA journal_mode = WAL;

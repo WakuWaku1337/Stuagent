@@ -48,6 +48,29 @@ export const AGENT_MAX_TOOL_STEPS = Math.max(0, Math.round(envNumber('AGENT_MAX_
 export const AGENT_WALL_CLOCK_MS = Math.max(0, Math.round(envNumber('AGENT_WALL_CLOCK_MS', 180_000)));
 export const AGENT_TOKEN_BUDGET = Math.max(0, Math.round(envNumber('AGENT_TOKEN_BUDGET', 0)));
 
+/** Pi AgentSession 缓存：最大条数与空闲过期分钟数；0 表示不限制 */
+export const AGENT_SESSION_MAX = Math.max(0, Math.round(envNumber('AGENT_SESSION_MAX', 300)));
+export const AGENT_SESSION_TTL_MIN = Math.max(0, Math.round(envNumber('AGENT_SESSION_TTL_MIN', 60)));
+
+/** 聊天并发门限：全局、单用户与排队等待；0 表示不限制/不排队 */
+export const AGENT_MAX_CONCURRENT = Math.max(0, Math.round(envNumber('AGENT_MAX_CONCURRENT', 6)));
+export const AGENT_MAX_CONCURRENT_PER_USER = Math.max(
+  0,
+  Math.round(envNumber('AGENT_MAX_CONCURRENT_PER_USER', 2)),
+);
+export const AGENT_QUEUE_WAIT_MS = Math.max(0, Math.round(envNumber('AGENT_QUEUE_WAIT_MS', 15_000)));
+
+/** 运行时表清理：间隔小时、幂等记录保留小时、已结束任务保留天 */
+export const MAINTENANCE_INTERVAL_HOURS = Math.max(
+  0,
+  Math.round(envNumber('MAINTENANCE_INTERVAL_HOURS', 6)),
+);
+export const IDEMPOTENCY_RETENTION_HOURS = Math.max(
+  1,
+  Math.round(envNumber('IDEMPOTENCY_RETENTION_HOURS', 24)),
+);
+export const TASK_RETENTION_DAYS = Math.max(1, Math.round(envNumber('TASK_RETENTION_DAYS', 30)));
+
 export const TASK_RETRY_MAX = Math.max(0, Math.round(envNumber('TASK_RETRY_MAX', 3)));
 
 export const FAST_MODEL_ID = envText('FAST_MODEL_ID');

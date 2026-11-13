@@ -10,3 +10,7 @@ server/.env
 .agents
 .scratch
 docs
+.workbuddy/
+deploy/
+*.tsbuildinfo
+.vscode/

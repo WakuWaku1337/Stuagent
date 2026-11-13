@@ -155,7 +155,7 @@ function buildSurface(spec: Record<string, unknown>) {
       const line: number[] = [];
       for (let col = 0; col <= size; col += 1) {
         const x = range[0] + ((range[1] - range[0]) * col) / size;
-        const value = fn(x, y);
+        const value = fn(x, { y });
         line.push(Number.isFinite(value) ? value : 0);
       }
       heights.push(line);

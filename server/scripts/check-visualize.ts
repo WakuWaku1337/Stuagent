@@ -99,6 +99,98 @@ try {
     modeledFunctions[0]?.label,
   );
 
+  const absModel = modelVisualization('画出函数 y=|x| 的图像', '数学');
+  const absFn = (absModel?.spec.functions ?? []) as { expression: string }[];
+  const absEvaluator = compileExpression(absFn[0]?.expression ?? '');
+  report(
+    absFn[0]?.expression === 'abs(x)' &&
+      absEvaluator(-2) === 2 &&
+      absEvaluator(0) === 0 &&
+      absEvaluator(2) === 2,
+    'model absolute value without function-call corruption',
+    absFn[0]?.expression,
+  );
+
+  const sinModel = modelVisualization('画出函数 y=sin(x)+1 的图像', '数学');
+  const sinFn = (sinModel?.spec.functions ?? []) as { expression: string }[];
+  const sinEvaluator = compileExpression(sinFn[0]?.expression ?? '');
+  report(
+    sinFn[0]?.expression === 'sin(x)+1' && Math.abs(sinEvaluator(0) - 1) < 1e-9,
+    'model trigonometric function without function-call corruption',
+    sinFn[0]?.expression,
+  );
+
+  const compositeModel = modelVisualization('已知 g(x)=|x-3|-|x+3|，画出函数 f(x)=g(x)g(|x|) 的图像', '数学');
+  const compositeSpec = compositeModel?.spec as Record<string, unknown> | undefined;
+  const compositeFns = (compositeSpec?.functions ?? []) as { expression: string; label: string }[];
+  const compositeTarget = compositeFns.find((item) => item.label.startsWith('f('));
+  const compositeEvaluator = compileExpression(compositeTarget?.expression ?? '');
+  const compositeSliders = (compositeSpec?.sliders ?? []) as { param: string }[];
+  report(
+    Boolean(compositeTarget) &&
+      !compositeTarget!.expression.includes('g(') &&
+      compositeEvaluator(0) === 0 &&
+      compositeEvaluator(1) === 4 &&
+      compositeEvaluator(4) === 36 &&
+      compositeSliders.every((item) => item.param !== 'g'),
+    'resolve function composition and exclude function names from sliders',
+    compositeTarget?.expression,
+  );
+
+  const piecewiseQuestion =
+    '画出分段函数 f(x)=\\begin{cases}6, & x<=-3\\\\-2x, & -3<x<3\\\\-6, & x>=3\\end{cases} 的图像';
+  const piecewiseModel = modelVisualization(piecewiseQuestion, '数学');
+  const piecewiseFns = (piecewiseModel?.spec.functions ?? []) as {
+    piecewise?: { when: string; then: string }[];
+  }[];
+  const branches = piecewiseFns[0]?.piecewise ?? [];
+  const evaluatePiecewise = (x: number): number => {
+    for (const branch of branches) {
+      if (compileExpression(branch.when)(x) !== 0) return compileExpression(branch.then)(x);
+    }
+    return Number.NaN;
+  };
+  report(
+    branches.length === 3 &&
+      evaluatePiecewise(-4) === 6 &&
+      evaluatePiecewise(0) === 0 &&
+      evaluatePiecewise(4) === -6,
+    'parse and evaluate three-branch piecewise function',
+    JSON.stringify(branches),
+  );
+
+  const piecewiseViz = createVisualization({
+    type: 'function2d',
+    title: '分段函数',
+    spec: {
+      functions: [
+        {
+          label: 'f(x)=分段函数',
+          piecewise: [
+            { when: 'x<=-3', then: '6' },
+            { when: '(-3<x)&&(x<3)', then: '-2*x' },
+            { when: 'x>=3', then: '-6' },
+          ],
+        },
+      ],
+      range: [-8, 8],
+    },
+  });
+  report(
+    Array.isArray(piecewiseViz.spec.functions) &&
+      (piecewiseViz.spec.functions as { piecewise?: unknown[] }[])[0]?.piecewise?.length === 3,
+    'create piecewise visualization through validation',
+  );
+  report(
+    expectError(() =>
+      createVisualization({
+        type: 'function2d',
+        title: '坏函数',
+        spec: { expression: 'abs*(x)', range: [-2, 2] },
+      }),
+    ),
+    'reject uncompilable function expression',
+  );
   const intersectionModel = modelVisualization('二次函数 y=2x+1 与 y=x^2 的交点', '数学');
   const relations = (intersectionModel?.spec.relations ?? []) as { solve: string }[];
   report(

@@ -8,6 +8,7 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     port: 5173,
+    fs: { allow: ['..'] },
     proxy: {
       // 保留浏览器 Host/Origin 同源，服务端 CSRF 校验才能通过
       '/api': { target: apiTarget, changeOrigin: false },
