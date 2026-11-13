@@ -98,7 +98,14 @@ export function createVisualizeTool() {
       const spec = parseSpec(params.spec);
       let visualization: Visualization | null = null;
 
-      if (params.type && spec) {
+      // function2d 有题目原文时优先走本地确定性建模：模型经常把 f(-x) 误写成 f(x)，
+      // 还会带出整块区域填充。只有建模失败时才使用模型自带的 type+spec。
+      if (params.question && params.type === 'function2d') {
+        const modeled = await generateVisualization({ question: params.question, subject: params.subject });
+        if (modeled) visualization = modeled.visualization;
+      }
+
+      if (!visualization && params.type && spec) {
         try {
           visualization = createVisualization({
             type: params.type as VisualizationType,

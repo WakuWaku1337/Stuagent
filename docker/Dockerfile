@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
 RUN npm ci --no-audit --no-fund
+COPY shared shared
 COPY web web
 RUN npm run build --workspace web
 
@@ -17,7 +18,9 @@ ENV NODE_ENV=production \
 COPY package.json package-lock.json ./
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
-RUN apt-get update \
+COPY shared shared
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 RUN npm ci --workspace server --omit=dev --no-audit --no-fund && npm cache clean --force

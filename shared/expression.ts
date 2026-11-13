@@ -344,11 +344,21 @@ function serializeNode(node: ExprNode, parentPrecedence = 0): string {
     case 'var':
       return node.name;
     case 'unary': {
+      if (node.op === '-' && node.arg.kind === 'unary' && node.arg.op === '-') {
+        return serializeNode(node.arg.arg, parentPrecedence);
+      }
       const arg = serializeNode(node.arg, 4);
       const text = `${node.op}${arg}`;
       return 4 < parentPrecedence ? `(${text})` : text;
     }
     case 'binary': {
+      // 展示层消掉双重负号：a-(-b) => a+b，a+(-b) => a-b。
+      if (node.op === '-' && node.right.kind === 'unary' && node.right.op === '-') {
+        return serializeNode({ kind: 'binary', op: '+', left: node.left, right: node.right.arg }, parentPrecedence);
+      }
+      if (node.op === '+' && node.right.kind === 'unary' && node.right.op === '-') {
+        return serializeNode({ kind: 'binary', op: '-', left: node.left, right: node.right.arg }, parentPrecedence);
+      }
       const precedence = OPERATOR_PRECEDENCE[node.op];
       const leftPrecedence = node.op === '^' ? precedence + 1 : precedence;
       const rightPrecedence = node.op === '^' || node.op === '+' || node.op === '*' ? precedence : precedence + 1;
