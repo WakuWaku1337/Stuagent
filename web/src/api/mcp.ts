@@ -6,6 +6,8 @@ export interface McpToolInfo {
   description: string;
   inputSchema: Record<string, unknown>;
   enabled: boolean;
+  side_effect: boolean;
+  confirmed_at: number | null;
 }
 
 export interface McpServerView {
@@ -85,5 +87,14 @@ export function toggleMcpTool(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
+  });
+}
+
+export function confirmMcpTool(
+  serverId: string,
+  toolName: string,
+): Promise<{ server: McpServerView }> {
+  return request(`/api/mcp/servers/${serverId}/tools/${encodeURIComponent(toolName)}/confirm`, {
+    method: 'POST',
   });
 }

@@ -11,3 +11,4 @@ server/models/sherpa-onnx-paraformer-zh-small/
 *.log
 .DS_Store
 .ocr-test/
+.scratch/

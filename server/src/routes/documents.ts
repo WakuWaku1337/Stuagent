@@ -21,10 +21,9 @@ import { deleteBySource } from '../rag/milvus.ts';
 import { indexDocument } from '../rag/service.ts';
 import { invalidateRagCache } from '../rag/cache.ts';
 import { invalidateAnswerCache } from '../chat/answer-cache.ts';
+import { MAX_BATCH_BYTES, MAX_BATCH_FILES } from '../documents/limits.ts';
 
 const documents = new Hono();
-const MAX_BATCH_FILES = 50;
-const MAX_BATCH_BYTES = 200 * 1024 * 1024;
 
 function triggerIndex(documentId: string) {
   indexDocument(documentId).catch((e) => {
@@ -86,7 +85,7 @@ async function handleUpload(c: Context) {
           code: e.code,
           message: e.message,
           source_path: sourcePath,
-          ...(e.detail as object),
+          ...(e.detail ? { detail: e.detail } : {}),
         });
       } else {
         results.push({

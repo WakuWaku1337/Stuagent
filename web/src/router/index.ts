@@ -20,6 +20,8 @@ const UsageView = () => import('../views/UsageView.vue');
 const StorageView = () => import('../views/StorageView.vue');
 const McpView = () => import('../views/McpView.vue');
 const VisualizeView = () => import('../views/VisualizeView.vue');
+const PrivacyView = () => import('../views/PrivacyView.vue');
+const TermsView = () => import('../views/TermsView.vue');
 
 const router = createRouter({
   history: createWebHistory(),
@@ -36,6 +38,18 @@ const router = createRouter({
       name: 'register',
       component: RegisterView,
       meta: { public: true, title: '注册', subtitle: '' },
+    },
+    {
+      path: '/privacy',
+      name: 'privacy',
+      component: PrivacyView,
+      meta: { public: true, title: '隐私政策', subtitle: '' },
+    },
+    {
+      path: '/terms',
+      name: 'terms',
+      component: TermsView,
+      meta: { public: true, title: '用户协议', subtitle: '' },
     },
     {
       path: '/account',

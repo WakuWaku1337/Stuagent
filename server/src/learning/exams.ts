@@ -290,14 +290,16 @@ export async function analyzeExam(examId: string): Promise<AnalyzeResult> {
   }
 
   let wrongAdded = 0;
+  const learnerId = currentLearnerId();
   for (const q of questions) {
     if (q.is_correct === 1) continue;
     db.prepare(
-      `INSERT OR IGNORE INTO questions (question_id, bank_id, subject, knowledge_point, difficulty, content, options, answer, explanation, source, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, '{}', ?, NULL, ?, ?)`,
+      `INSERT OR IGNORE INTO questions (question_id, bank_id, learner_id, subject, knowledge_point, difficulty, content, options, answer, explanation, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, NULL, ?, ?)`,
     ).run(
       q.exam_question_id,
       `exam:${examId}`,
+      learnerId,
       paper.subject,
       q.knowledge_point ?? '未标注',
       '考试',

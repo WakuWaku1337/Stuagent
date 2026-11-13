@@ -9,17 +9,18 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: apiTarget, changeOrigin: true },
-      '/health': { target: apiTarget, changeOrigin: true },
-      '/ws': { target: wsTarget, ws: true },
+      // 保留浏览器 Host/Origin 同源，服务端 CSRF 校验才能通过
+      '/api': { target: apiTarget, changeOrigin: false },
+      '/health': { target: apiTarget, changeOrigin: false },
+      '/ws': { target: wsTarget, ws: true, changeOrigin: true },
     },
   },
   preview: {
     port: 4173,
     proxy: {
-      '/api': { target: apiTarget, changeOrigin: true },
-      '/health': { target: apiTarget, changeOrigin: true },
-      '/ws': { target: wsTarget, ws: true },
+      '/api': { target: apiTarget, changeOrigin: false },
+      '/health': { target: apiTarget, changeOrigin: false },
+      '/ws': { target: wsTarget, ws: true, changeOrigin: true },
     },
   },
   build: {

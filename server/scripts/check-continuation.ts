@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   MAX_CONTINUATIONS,
   continuationPrompt,
@@ -5,6 +7,7 @@ import {
   manualContinuationPrompt,
   mergeContinuation,
 } from '../src/chat/integrity.ts';
+import { CHAT_HISTORY_LIMIT, HISTORY_ITEM_MAX_CHARS, historyReplayLimit } from '../src/config.ts';
 
 let failures = 0;
 
@@ -38,6 +41,21 @@ report(
 );
 const manual = manualContinuationPrompt('手动续写末尾');
 report(manual.includes('手动续写末尾') && manual.includes('不要重复'), 'manual continuation prompt');
+
+report(CHAT_HISTORY_LIMIT === 16, 'default history limit is 16');
+report(HISTORY_ITEM_MAX_CHARS === 6000, 'default history item max chars is 6000');
+report(historyReplayLimit() >= 4 && historyReplayLimit() <= 60, 'history limit stays within 4-60');
+const handlerSource = readFileSync(resolve(import.meta.dirname, '../src/chat/handler.ts'), 'utf8');
+const piSource = readFileSync(resolve(import.meta.dirname, '../src/pi.ts'), 'utf8');
+report(
+  handlerSource.includes('historyReplayLimit()') && piSource.includes('historyReplayLimit()'),
+  'handler and pi share history replay limit',
+);
+report(
+  handlerSource.includes('HISTORY_ITEM_MAX_CHARS') && piSource.includes('HISTORY_ITEM_MAX_CHARS'),
+  'handler and pi share history item truncation',
+);
+report(!/slice\(-24\)/.test(piSource) && !/\b8000\b/.test(piSource), 'pi no longer hardcodes 24 / 8000');
 
 console.log(failures === 0 ? 'ALL PASS' : `---\n${failures} FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

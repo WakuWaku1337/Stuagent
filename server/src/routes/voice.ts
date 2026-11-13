@@ -5,14 +5,16 @@ import {
   asrModelReady,
   transcribeWav,
 } from '../voice/asr.ts';
+import { TTS_DEFAULT_VOLUME } from '../config.ts';
 
 const voice = new Hono();
 
 function voiceErrorResponse(c: Context, error: unknown) {
   if (error instanceof VoiceError) {
-    return c.json({ code: error.code, error: error.message }, error.status as 400);
+    return c.json({ code: error.code, error: error.message, message: error.message }, error.status as 400);
   }
-  return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  const message = error instanceof Error ? error.message : String(error);
+  return c.json({ code: 'VOICE_ERROR', error: message, message }, 500);
 }
 
 voice.get('/asr', (c) =>
@@ -52,23 +54,30 @@ function ttsMode(): 'server' | 'browser' {
 voice.get('/tts', (c) =>
   c.json({
     mode: ttsMode(),
+    volume: TTS_DEFAULT_VOLUME,
     note:
       ttsMode() === 'server'
-        ? '使用服务端 TTS（OpenAI 兼容 /audio/speech）'
-        : '使用浏览器 speechSynthesis（系统语音，音色与语速可调）',
+        ? '使用服务端 TTS（OpenAI 兼容 /audio/speech）；volume 为客户端应用参数，服务端不改音频'
+        : '使用浏览器 speechSynthesis（系统语音，音色与语速可调）；volume 由浏览器应用',
   }),
 );
 
 voice.post('/tts', async (c) => {
-  const body = await c.req.json<{ text?: string; rate?: number }>().catch(() => null);
+  const body = await c.req.json<{ text?: string; rate?: number; volume?: number }>().catch(() => null);
   const text = body?.text?.trim();
-  if (!text) return c.json({ error: 'text 不能为空' }, 400);
-  if (text.length > 5000) return c.json({ error: '朗读文本不能超过 5000 字' }, 400);
+  if (!text) return c.json({ error: 'text 不能为空', message: 'text 不能为空' }, 400);
+  if (text.length > 5000) {
+    return c.json({ error: '朗读文本不能超过 5000 字', message: '朗读文本不能超过 5000 字' }, 400);
+  }
+  // C02：volume 只做范围校验与回显，不送入 /audio/speech（OpenAI 兼容接口无标准音量参数）。
+  // 实际音量由浏览器 Audio.volume / SpeechSynthesisUtterance.volume 应用；非浏览器客户端自行应用。
+  const volume = Math.min(1, Math.max(0, Number(body?.volume ?? TTS_DEFAULT_VOLUME) || 0));
 
   if (ttsMode() === 'browser') {
     return c.json({
       mode: 'browser',
       reason: '未配置服务端 TTS，使用浏览器语音合成',
+      volume,
     });
   }
 
@@ -90,22 +99,33 @@ voice.post('/tts', async (c) => {
     if (!response.ok) {
       const detail = (await response.text().catch(() => '')).slice(0, 200);
       return c.json(
-        { mode: 'browser', error: `服务端 TTS 失败（${response.status}）${detail ? `：${detail}` : ''}` },
+        {
+          mode: 'browser',
+          error: `服务端 TTS 失败（${response.status}）${detail ? `：${detail}` : ''}`,
+          message: `服务端 TTS 失败（${response.status}）${detail ? `：${detail}` : ''}`,
+          volume,
+        },
         502,
       );
     }
     const audio = Buffer.from(await response.arrayBuffer());
-    if (audio.length === 0) return c.json({ mode: 'browser', error: '服务端 TTS 返回空音频' }, 502);
+    if (audio.length === 0) {
+      return c.json({ mode: 'browser', error: '服务端 TTS 返回空音频', message: '服务端 TTS 返回空音频', volume }, 502);
+    }
     return c.body(audio, 200, {
       'Content-Type': response.headers.get('content-type') || 'audio/mpeg',
       'Cache-Control': 'no-store',
       'X-TTS-Mode': 'server',
+      'X-TTS-Volume': String(volume),
     });
   } catch (error) {
+    const message = `服务端 TTS 请求失败：${error instanceof Error ? error.message : String(error)}`;
     return c.json(
       {
         mode: 'browser',
-        error: `服务端 TTS 请求失败：${error instanceof Error ? error.message : String(error)}`,
+        error: message,
+        message,
+        volume,
       },
       502,
     );

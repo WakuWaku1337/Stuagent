@@ -1,3 +1,5 @@
+import { FAST_MODEL_ID } from '../config.ts';
+
 export type ProviderApi = 'openai-completions' | 'anthropic-messages';
 export type ReasoningLevel = 'low' | 'medium' | 'high';
 
@@ -187,6 +189,16 @@ export function modelOrDefault(providerId: string, modelId: string): ProviderMod
       outputPrice: 0,
     }
   );
+}
+
+/** 快模型只用于明确列出的轻量场景；未配置或模型不在目录中时保持原模型 */
+const FAST_MODEL_SCENARIOS = new Set(['routing']);
+
+export function modelForScenario(providerId: string, scenario: string, fallback: string): string {
+  if (!FAST_MODEL_ID || !FAST_MODEL_SCENARIOS.has(scenario) || providerId === 'none') return fallback;
+  const provider = findProvider(providerId);
+  if (provider?.env || findModel(providerId, FAST_MODEL_ID)) return FAST_MODEL_ID;
+  return fallback;
 }
 
 export const REASONING_LABELS: Record<ReasoningLevel, string> = {

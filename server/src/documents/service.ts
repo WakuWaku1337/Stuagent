@@ -17,11 +17,11 @@ import { chunkBlocks } from './chunker.ts';
 import { detectEncoding, parseDoc, parseDocx, parseMarkdown, parsePdf, parseText, type ParsedBlock } from './parsers.ts';
 import { analyzePdf, removeOcrFiles, startOcrJob } from './pdf-ocr.ts';
 import { currentLearnerId } from '../learning/context.ts';
+import { MAX_FILE_BYTES } from './limits.ts';
 
 export const uploadDir = uploadsDir;
 mkdir(uploadDir, { recursive: true }).catch(() => {});
 
-const MAX_SIZE = 50 * 1024 * 1024;
 const ALLOWED = new Map<string, { mime: RegExp; parse: (buf: Buffer) => ParsedBlock[] | Promise<ParsedBlock[]> }>([
   ['.pdf', { mime: /^application\/pdf$/, parse: (b) => parsePdf(b) }],
   [
@@ -108,7 +108,9 @@ export async function ingestFile(file: File, meta: UploadMeta): Promise<UploadRe
     });
   }
   if (file.size === 0) throw new DocumentError(400, 'FILE_EMPTY', '空文件', { filename });
-  if (file.size > MAX_SIZE) throw new DocumentError(413, 'FILE_TOO_LARGE', '超过大小限制', { filename, max: '50MB' });
+  if (file.size > MAX_FILE_BYTES) {
+    throw new DocumentError(413, 'FILE_TOO_LARGE', '超过大小限制', { filename, max: `${MAX_FILE_BYTES / 1024 / 1024}MB` });
+  }
   if (file.type && !parser.mime.test(file.type) && file.type !== 'application/octet-stream') {
     throw new DocumentError(415, 'INVALID_MIME', 'MIME 与扩展名不符', { filename, mime: file.type });
   }

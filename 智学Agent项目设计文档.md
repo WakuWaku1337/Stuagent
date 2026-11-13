@@ -4,13 +4,14 @@
 
 | 项目   | 内容                         |
 | ---- | -------------------------- |
-| 文档版本 | v0.30（草案，账号方案简化为用户名密码） |
+| 文档版本 | v0.31（实现对齐版） |
 | 编写日期 | 2026-11-06                 |
-| 修订日期 | 2026-11-08（v0.30）          |
+| 修订日期 | 2026-11-12（v0.31）          |
 | 项目代号 | EduPi（中文名 "智学"，可改名）        |
 | 基础框架 | Pi Coding Agent（pi.dev）    |
-| 文档状态 | 待评审                        |
+| 文档状态 | 已按实现对齐                        |
 
+> v0.31 变更：以当前代码为事实基线，同步技术选型、扩展机制、数据模型、配置项、接口与验收口径；规划态但尚未实现的条目统一标注「未实现」。详见附录 B。
 > v0.30 变更：账号方案收敛为“简单账号密码”——注册只填用户名、密码、手机号、邮箱（可选，不验证）；移除邮箱验证码、邮件找回、CAPTCHA、管理员 2FA、邀请码、按账号配额；保留服务端会话、数据隔离、管理员重置密码与上线最低要求。S32–S34 精简，取消 S35。
 > v0.29（历史）：按公网个人网站标准扩展过邮箱验证、邮件 DNS、CAPTCHA、2FA、配额与完整上线清单；因当前只需要简单登录，已在 v0.30 收回。
 
@@ -165,21 +166,21 @@
 | --------- | -------------------------------------------------------------- |
 | 内核        | Pi Coding Agent（`@earendil-works/pi-coding-agent`）             |
 | 开发语言      | TypeScript（jiti 免编译，直接运行 .ts）                                  |
-| 参数校验      | TypeBox                                                        |
-| 持久化       | SQLite（better-sqlite3）+ 本地 Markdown/JSON 文件                    |
-| 扩展协议      | MCP（pi-mcp-adapter / pi-mcp-extension）                         |
-| 子智能体      | pi-subagents / pi-workflow-engine                              |
+| 参数校验      | typebox@1.3.27（仅工具参数 schema）                            |
+| 持久化       | node:sqlite（Node ≥22.5，实际 Node 24）+ 本地 Markdown/JSON 文件  |
+| 扩展协议      | 自研 @modelcontextprotocol/sdk 客户端 + Pi customTools            |
+| 子智能体      | 规则 + LLM 路由（单 AgentSession + 角色目录）                     |
 | 模型        | 云端（Anthropic/OpenAI/Google）或本地 Ollama（OpenAI 兼容接口）             |
 | RAG       | Milvus 混合检索（Dense + 原生 BM25）→ RRFRanker 粗融合 → Cross-Encoder 精排 |
 | 向量数据库     | Milvus：Standalone（Docker，Node SDK）为主，Lite（Python 嵌入式）为备选       |
-| Embedding | BGE / E5（支持本地部署）                                               |
-| Reranker  | BGE-reranker（本地）/ Cohere Rerank（云端）                            |
+| Embedding | text-embedding-v4（云端 OpenAI 兼容 /embeddings，1024 维）         |
+| Reranker  | gte-rerank-v2（云端 DashScope 风格端点）                          |
 | 前端框架      | Vue3 + Vite + TypeScript                                       |
 | 前端生态      | Pinia、Vue Router、Element Plus、Axios、KaTeX、ECharts              |
 | 后端服务      | Node.js + Hono（内嵌 Pi，提供 REST + SSE；可替换 Express）                |
 | 认证        | 自研服务端会话（HttpOnly Cookie）+ Node `crypto.scrypt` 密码哈希；不引入 JWT/OAuth 依赖 |
 | 反代与 TLS  | Caddy（自动 HTTPS）或 Nginx + Let's Encrypt；应用层限流 |
-| 生产部署      | Linux VPS + Docker Compose；应用、Milvus、Docling 分服务 |
+| 生产部署      | Linux VPS + Docker Compose；应用、Milvus、Docling 分服务；运行时 Node.js 24 |
 | 监控与备份    | 健康检查 + 外部 uptime；SQLite/uploads 每日备份 |
 
 
@@ -298,6 +299,8 @@ flowchart LR
 
 扩展放置于 Pi 自动发现目录 `~/.pi/agent/extensions/edu-agent/`：
 
+> 实现对齐（v0.31）：以上为规划态目录。实际目录为 `server/src/**` 扁平模块（rag/、learning/、auth/、chat/、mcp/、documents/、config.ts、pi.ts、store.ts）+ `server/agent-workspace/roles/<role>/.pi/skills/`；`mcp.json` 生成在 `server/data/pi-agent/mcp.json`；`src/hooks/` 不存在；Skills 按角色分发（tutor: socratic/mind/edulab，quizzer: quiz-gen/mind，analyst: mind，solver: mind/edulab）。
+
 
 
 ```
@@ -319,7 +322,7 @@ edu-agent/
 ├── skills/                   # SKILL.md 教学法技能
 │   ├── socratic/SKILL.md
 │   ├── quiz-gen/SKILL.md
-│   └── edulab/               # 移植 edulab
+│   └── edulab/               # 移植 edulab【未实现，v0.31】
 └── mcp.json                  # RAG / OCR / TTS / 安全 MCP
 ```
 
@@ -419,42 +422,34 @@ flowchart TD
 
 3. Pi 默认不内置完整 Router/Worker 运行时，需用 pi-workflow-engine + pi-subagents + 自研持久化实现，**放在 P1/P2，不进入 P0 MVP**。
 
+> 实现状态（v0.31）：Router/Worker 运行时、spawn 子智能体、append-only 会话日志、外部 Watchdog 均未实现；当前为 7 条带权正则 + LLM 分类的单层路由（server/src/agents/router.ts），后台任务由 server/src/tasks/queue.ts 单 Worker 队列承担，watchdog 用 AbortController 真正中止。
+
 ### 5.6 考试复盘流程（拍照识别 + 复盘）
 
-#### 5.6.1 流程图
-
-
+#### 5.6.1 当前实现流程图
 
 ```mermaid
 flowchart TD
-    P["拍照/上传整卷（多张照片或 PDF）"] --> Pre["图像预处理：纠偏、拼接、分页"]
-    Pre --> OCR["OCR/多模态识别：题目、学生作答、批改痕迹（勾叉/分数/批注）"]
+    P["上传单份试卷：图片或 PDF"] --> OCR["OCR / 多模态识别：题目、学生作答、批改痕迹"]
     OCR --> Struct["结构化试卷：题号、题型、分值、学生答案、正确答案、得分"]
-    Struct --> Judge{"是否已有老师批改？"}
-    Judge -->|有| Read["读取批改结果与得分"]
-    Judge -->|无| AI["AI 自动判分"]
+    Struct --> Read["读取识别出的 got_score / is_correct"]
     Read --> Reason["逐题错因归类：知识漏洞/审题失误/计算错误/表达不规范/时间分配"]
-    AI --> Reason
-    Reason --> Link["关联知识点：更新 BKT 掌握度，错题自动入错题本"]
-    Link --> Report["生成复盘报告：得分率、题型/章节/知识点失分分布、提分建议、变式题、下次目标"]
+    Reason --> Link["关联知识点：更新 BKT 掌握度，错题按 learner_id 自动入错题本"]
+    Link --> Report["生成复盘报告：得分率、题型/知识点失分分布、提分建议、下次目标"]
     Report --> Trend["历史对比：多次考试趋势分析"]
-    Trend --> Out["输出报告（Markdown，可导出）"]
+    Trend --> Out["输出 Markdown 报告"]
 ```
 
-#### 5.6.2 复盘报告内容
+【未实现，v0.31】多图自动拼接、图像纠偏、分页处理、确定性自动判分、报告导出。
 
+#### 5.6.2 复盘报告内容（当前实现）
 
-
-* **总体情况**：总分、得分率、用时、与上次考试对比。
-
-* **失分分布**：按题型、章节、知识点三个维度统计失分。
-
+* **总体情况**：总分、得分率。
+* **失分分布**：按题型与知识点统计；章节维度未实现。
 * **错因归类**：知识漏洞、审题失误、计算错误、表达不规范、时间分配。
-
-* **行动建议**：薄弱知识点清单、变式题 / 同类题推荐、下次目标分。
-
+* **行动建议**：薄弱知识点清单、下次目标分；变式题推荐未实现。
 * **自动联动**：错题进入错题本、更新掌握度、调整后续复习计划。
-
+* **未实现**：用时统计、与上次考试对比、报告导出；当前仅保留已实现的趋势页与 Markdown 报告展示。
 ### 5.7 RAG 混合检索与重排流程
 
 检索采用 "**混合检索 → RRF 粗融合 → Cross-Encoder 精排**" 三级管线，先保证召回覆盖，再逐步提升精度。
@@ -496,7 +491,7 @@ flowchart TD
 
 * RRF 常数：k = 60。
 
-* 精排候选：粗排 Top 50，最终取 Top 5–10。
+* 精排候选：召回上限 50（`RAG_RECALL_LIMIT`），粗排候选 30（`RAG_CANDIDATE_K`），最终取 Top 5（`RAG_TOP_K`）。
 
 * 文档切片：语义 / 固定窗口 chunk，保留章节与页码元数据用于引用。
 
@@ -524,7 +519,7 @@ flowchart TD
 
 #### 5.7.6 Collection 与字段设计
 
-共两个集合：`edu_chunks`（教材 / 资料切片）与 `edu_questions`（题库 / 错题向量化，用于相似题、变式题）。
+共两个集合：`edu_chunks`（教材 / 资料切片）与 `edu_questions`（题库 / 错题向量化，用于相似题、变式题）。【未实现，v0.31】
 
 **Collection 1：edu\_chunks（知识块）**
 
@@ -566,10 +561,12 @@ flowchart TD
 | ----------------- | ---- | ------------------- |
 | BGE-small-zh-v1.5 | 512  | 轻量、本地推理快            |
 | BGE-base-zh-v1.5  | 768  | 均衡                  |
-| BGE-M3            | 1024 | 中文 / 多语言强，**本项目默认** |
+| text-embedding-v4 | 1024 | 本项目默认（云端）                |
 | BGE-large-zh-v1.5 | 1024 | 精度高、资源占用大           |
 
 维度必须与所选模型一致，建集合后不可改；更换模型需重建集合并重新灌库。
+
+embedding 与 rerank 会把 query / chunk 原文发往云端模型服务，不是本地部署；检索链路默认无 PII 脱敏（DOCUMENT_PII_REDACT 可选开关）。
 
 #### 5.7.8 索引与检索参数
 
@@ -627,7 +624,7 @@ await client.createCollection({
 });
 ```
 
-字段命名（如 data\_type、autoID）以实际使用的 Node SDK 版本 API 参考为准；`edu_questions` 结构同理。
+字段命名（如 data\_type、autoID）以实际使用的 Node SDK 版本 API 参考为准；`edu_questions` 结构同理。【未实现，v0.31】
 
 #### 5.7.10 文档灌库流程
 
@@ -639,7 +636,7 @@ flowchart TD
     B --> C["清洗：去页眉页脚、目录、水印；扫描件 OCR"]
     C --> D["切分 Chunk：按标题层级语义切，固定窗口兜底"]
     D --> E["附加元数据：source/chapter/page"]
-    E --> F["BGE-M3 批量生成 dense 向量"]
+    E --> F["text-embedding-v4 批量生成 dense 向量"]
     F --> G["写入 Milvus edu_chunks"]
     G --> H["BM25 Function 自动生成 sparse 向量"]
     H --> I["校验：数量、抽样可检索性"]
@@ -661,7 +658,9 @@ flowchart TD
 
 #### 5.7.12 检索评测指标
 
-先构建标注评测集：学生真实问题 + 人工标注相关 chunk 与标准答案，按学科分组。
+评测集为 8 题小样本：学生真实问题 + 人工标注相关 chunk 与标准答案，按学科分组。
+
+已实现指标：Hit@1/3/5、Recall@5、MRR、P50/P95、Precision@5、nDCG@5、引用命中率（Citation Precision@5）。
 
 
 
@@ -675,11 +674,13 @@ flowchart TD
 | 引用正确率       | 答案引用是否真实支撑结论      | 防幻觉            |
 | 延迟 P50/P95  | 检索 + 生成耗时         | 本地体验           |
 
+> 引用正确率：答案级判定不可计算，需 expected_citations 与生成答案标注；脚本仅输出检索级代理并明确标注。高级指标标注缺失时输出「不可计算」且退出码 0。
+
 #### 5.7.13 评测方法与方案对比
 
 
 
-* 离线对比四种方案：纯 dense、纯 BM25、混合 + RRF、混合 + RRF + Cross-Encoder。
+* 离线对比四种方案：纯 dense、纯 BM25、混合 + RRF、混合 + RRF + Cross-Encoder。【未实现】
 
 * 每次调整 chunk 大小、RRF k、召回数、reranker 后跑回归，比较 Recall@K、nDCG、MRR。
 
@@ -728,17 +729,26 @@ flowchart TD
 
 | 页面    | 主要功能                   |
 | ----- | ---------------------- |
+| 首页学习台 | 学习概览与快捷入口 |
+| /documents | 资料上传与管理 |
+| /quiz | 出题测验 |
+| /tasks | 后台任务列表与状态 |
+| /visualize | 交互课件与可视化 |
+| /settings | 设置 |
+| /usage | 用量统计 |
+| /storage | 存储用量与清理 |
+| /mcp | MCP 服务管理 |
 | 对话页   | 流式问答、图片 / 拍照上传、引用与公式渲染 |
 | 模考页   | 答题、计时、交卷、解析            |
 | 错题本页  | 错题列表、错因、复习推送           |
-| 掌握度页  | BKT 掌握度、薄弱点、ECharts 图表 |
+| 掌握度页 | BKT 掌握度、薄弱点、Element Plus 进度组件 |
 | 考试复盘页 | 上传整卷、复盘报告、历史趋势         |
 | 计划页   | 学习计划查看与调整              |
-| 课件页   | 3D 交互 HTML 课件（iframe）  |
+| 课件页   | 已合并，/courseware 重定向到 /visualize |
 | 登录 / 注册页 | 用户名密码登录、注册（手机号/邮箱可选）、首次管理员初始化 |
 | 账号页   | 修改密码、活跃会话、退出所有设备 |
 | 账号管理页 | 管理员建号、启停、改角色/联系方式、重置密码、审计、上线检查 |
-| 隐私 / 协议页 | 隐私政策、用户协议、联系方式 |
+| 隐私 / 协议页 | 路由与占位视图已建，正文/备案/联系方式待提供，登记为上线阻断 |
 
 #### 5.8.3 通信方式
 
@@ -831,6 +841,8 @@ flowchart TD
 | exam.analyze          | 考试 ID          | 逐题判分、错因、复盘报告                    | 写复盘 / 掌握度 / 错题 |
 | exam.compare          | 科目、时间范围        | 多次考试趋势对比                        | 读考试记录          |
 
+实现命名对照（v0.31）：表内点号命名实际为下划线——`knowledge_search`、`memory_write` / `memory_recall`、`wrongbook_add`、`mastery_update`、`quiz_generate`、`plan_make`、`exam_analyze`、`exam_compare`、`visualize_generate`；另增 `wrongbook_due`、`mastery_report` 与动态 `mcp__*`。`bank.extract`、`exam.recognize` 无对应 Pi 工具，功能由 REST 接口承担；注册方式为 `defineTool` 而非 `registerTool`。
+
 ### 6.2 技能（Skills，SKILL.md）
 
 
@@ -841,7 +853,7 @@ flowchart TD
 
 * mind：心智理论，先推断学生理解状态再讲解。
 
-* edulab：生成可离线打开的 MathJax/3D 交互 HTML 课件。
+* edulab：生成可离线打开的 MathJax/3D 交互 HTML 课件。【未实现，v0.31】
 
 ### 6.3 MCP 服务（mcp.json）
 
@@ -851,37 +863,50 @@ flowchart TD
 | ------------ | ------------------------------------ | -- |
 | Milvus 向量库   | 文档向量化、BM25 与混合检索（Node SDK 直连，可选 MCP） | P0 |
 | OCR / 视觉 MCP | 拍照题目识别、整卷 OCR 与批改痕迹识别                | P1 |
-| TTS / 视频 MCP | 解题配音与视频                              | P2 |
-| 安全 MCP       | 防注入、脱敏、输出过滤                          | P2 |
+| TTS / 视频 MCP | 解题配音与视频 | P2 |
+| 安全 MCP | 防注入、脱敏、输出过滤 | P2 |
+
+> 实现口径（v0.31）：MCP 服务由管理页配置并存加密 DB；`server/data/pi-agent/mcp.json` 仅同步命令 / URL / 工具开关，不写解密后的 env/headers。远程 MCP 只允许 `http` / `https`，可用 `MCP_ALLOWED_HOSTS` 收紧来源主机。断线重连、长期健康检查、管理页日志与推荐模板未实现。
 
 ### 6.4 关键钩子（Hooks）
 
 
 
-* `before_agent_start`：注入学习者画像、动态选择工具。
+未注册 Pi 自定义 hook 扩展；以下为等价实现清单：
 
-* `tool_call`：对危险操作做拦截（本地安全）。
+* `before_agent_start` → `server/src/pi.ts` 画像注入 + `server/src/agents/roles.ts` 工具白名单。
 
-* `turn_end`：在每轮结束时更新记忆与掌握度。
+* `tool_call` → `server/src/chat/handler.ts` 输入拦截（**危险工具拦截未实现**，工具集无系统级工具）。
 
-* `session_before_compact`：自定义压缩，保留关键学习信息。
+* `turn_end` → `chat/handler.ts` done 落库 + 工具主动写回。
+
+* `session_before_compact` → `server/src/config.ts` 历史回放 16 条 / 单条 6000 字。
 
 ### 6.5 后端 API 接口（REST）
 
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | /api/chat | 发起对话（SSE 流式返回；支持 `clientRequestId` 幂等） |
+| GET | /api/conversations/:id/messages | 拉取会话消息历史 |
+| POST | /api/documents、/api/documents/batch | 单文件 / 批量上传知识库文件 |
+| GET | /api/documents/:id/ocr | OCR 任务详情 |
+| GET/PUT | /api/documents/:id/ocr/pages/:page(/image) | 扫描页原图与 Markdown 校对 |
+| POST | /api/documents/:id/ocr/confirm、/ocr/retry | OCR 确认写回与重试 |
+| GET/PUT | /api/settings/generation | 读取 / 更新生成参数 |
+| GET | /api/settings/keys | 模型密钥列表（脱敏） |
+| GET/POST | /api/mcp/servers；POST /api/mcp/servers/:id/test | MCP 服务管理与连接测试 |
+| PUT/POST | /api/mcp/servers/:id/tools/:toolName(/confirm) | 工具启停与副作用确认 |
+| POST | /api/tasks/:id/cancel | 取消后台任务 |
+| GET/DELETE | /api/visualize/:id | 可视化详情与删除 |
+| GET/POST | /api/asr、/api/tts | 语音识别与服务端 TTS |
+| GET | /api/admin/system-check | 上线检查 |
+| GET | /api/wrongbook | 错题列表 |
+| POST | /api/quiz/generate、/api/quiz/answer | 生成题目 / 提交作答 |
+| GET | /api/mastery | 掌握度 |
+| POST | /api/reviews/recognize、/api/reviews/:id/analyze | 试卷识别与复盘分析 |
+| GET | /api/plan | 学习计划 |
 
-
-| 方法   | 路径                    | 用途                             |
-| ---- | --------------------- | ------------------------------ |
-| POST | /api/chat             | 发起对话（SSE 流式返回）                 |
-| POST | /api/documents        | 上传知识库文件（PDF/Word/TXT/MD，见 6.8） |
-| GET  | /api/wrongbook        | 错题列表                           |
-| POST | /api/quiz/generate    | 生成题目                           |
-| POST | /api/quiz/answer      | 提交作答                           |
-| GET  | /api/mastery          | 掌握度                            |
-| POST | /api/exam/recognize   | 上传试卷识别                         |
-| GET  | /api/exam/{id}/review | 复盘报告                           |
-| GET  | /api/plan             | 学习计划                           |
-
+> 本表为主要 API 摘要，非完整清单；完整路由以 `server/src/routes` 为准。POST /api/chat 由请求体 stream 字段决定是否 SSE。
 ### 6.6 BKT 贝叶斯知识追踪
 
 BKT 把每个知识点视为二元隐状态（已掌握 / 未掌握），根据每次答题对错用贝叶斯更新掌握概率。
@@ -947,7 +972,7 @@ $P(L_{t+1}) = P(L_t\mid obs) + (1-P(L_t\mid obs))P(T)$
 
 * 考试复盘：错题对应知识点 P (L) 下调，复习答对后回升。
 
-* 掌握度页面：展示各知识点 P (L) 与趋势（ECharts）。
+* 掌握度页面：用 Element Plus 进度条展示各知识点 P (L) 与薄弱点；ECharts 图表未使用。
 
 #### 6.6.6 局限与扩展
 
@@ -955,68 +980,27 @@ $P(L_{t+1}) = P(L_t\mid obs) + (1-P(L_t\mid obs))P(T)$
 
 ### 6.7 子智能体职责与系统提示词
 
-#### 6.7.1 职责总表
+#### 6.7.1 职责总表（以 `server/src/agents/roles.ts` 为准）
 
+| 子智能体 | 核心职责 | 可调用工具 | 触发场景 |
+| --- | --- | --- | --- |
+| Tutor 主讲 | 启发式对话、概念讲解、统一入口 | `knowledge_search`、`memory_write`、`memory_recall`、`wrongbook_add`、`plan_make`、`visualize_generate`、`mcp__*` | 日常答疑、概念讲解 |
+| Quizzer 出题 | 出题、组卷、难度校准、解析 | `quiz_generate`、`mastery_update`、`mastery_report`、`knowledge_search`、`mcp__*` | 自动出题、模考、每日练习 |
+| Analyst 诊断 | 掌握度、薄弱点、考试复盘、趋势 | `mastery_report`、`wrongbook_due`、`knowledge_search`、`exam_analyze`、`exam_compare`、`plan_make`、`mcp__*` | 诊断报告、考试复盘 |
+| Solver 解题 | 复杂题分步推理、验算、拍照题讲解 | `knowledge_search`、`visualize_generate`、`mcp__*` | 难题、多步推理、拍照答疑 |
 
-
-| 子智能体       | 核心职责            | 可调用工具                                    | 触发场景         |
-| ---------- | --------------- | ---------------------------------------- | ------------ |
-| Tutor 主讲   | 启发式对话、概念讲解、统一入口 | knowledge.search、memory.recall           | 日常答疑、概念讲解    |
-| Quizzer 出题 | 出题、组卷、难度校准、解析   | quiz.generate、mastery.update             | 自动出题、模考、每日练习 |
-| Analyst 诊断 | 掌握度、薄弱点、考试复盘、趋势 | mastery.update、exam.analyze、exam.compare | 诊断报告、考试复盘    |
-| Solver 解题  | 复杂题分步推理、验算      | knowledge.search                         | 难题、多步推理、拍照答疑 |
+`mcp__*` 表示管理页启用后动态注册的 MCP 工具（命名格式 `mcp__<server>__<tool>`）。
 
 #### 6.7.2 系统提示词
 
+系统提示词以仓库内文件为唯一来源，不在设计文档中维护副本：
 
+* `server/agent-workspace/roles/tutor/AGENTS.md`
+* `server/agent-workspace/roles/quizzer/AGENTS.md`
+* `server/agent-workspace/roles/analyst/AGENTS.md`
+* `server/agent-workspace/roles/solver/AGENTS.md`
 
-```
-# Tutor 主讲引导
-你是"智学"的主讲老师，面向一名高中生。
-目标：通过启发式对话帮助学生真正理解，而不是直接给答案。
-规则：
-1. 先判断学生卡在哪一步，再针对性讲解。
-2. 优先用提问引导学生自己思考（苏格拉底式），学生实在不会再给提示。
-3. 一次只讲一个点，由浅入深，语言通俗，必要时举例。
-4. 涉及教材内容时调用 knowledge.search，并标注引用来源。
-5. 公式与术语规范书写；学生情绪低落时给予鼓励。
-6. 排版克制：以正常段落为主，列表只用于并列步骤；少用加粗、冒号、破折号、括号和连续问号，一段只讲一个意思。
-输出：简洁、分点、可直接看懂。
-
-# Quizzer 出题组卷
-你是"智学"的出题老师。
-目标：按知识点和难度产出高质量题目，并依据作答校准难度。
-规则：
-1. 题干表述严谨、选项无歧义、答案唯一，附完整解析。
-2. 难度分基础/中等/拔高，覆盖指定知识点，避免偏题怪题。
-3. 根据 BKT 掌握度选择知识点与难度，薄弱点多出题。
-4. 调用 quiz.generate 出题，作答后调用 mastery.update 更新掌握度。
-输出：题目 + 答案 + 解析，结构清晰。
-
-# Analyst 诊断分析
-你是"智学"的诊断分析师。
-目标：基于数据客观呈现掌握情况与考试问题。
-规则：
-1. 只用已有数据说话，不臆测、不夸大。
-2. 输出结构化报告：总体、失分分布、错因归类、薄弱点、行动建议。
-3. 调用 exam.analyze / exam.compare 完成复盘与趋势对比。
-4. 建议要具体可执行，给出下次目标和变式题方向。
-输出：Markdown 报告，结论先行。
-
-# Solver 解题推理
-你是"智学"的解题专家。
-目标：对复杂题目给出严谨、可复核的分步解法。
-规则：
-1. 分步推理，每步写清依据，关键步骤显式标注。
-2. 完成后回代验算，确认答案正确。
-3. 先给完整严谨解法，再提炼给学生的引导要点（不直接代做）。
-4. 必要时调用 knowledge.search 查证公式与定理。
-5. 排版克制：以正常段落为主，列表只用于并列步骤；少用加粗、冒号、破折号、括号和连续问号，一段只讲一个意思。
-输出：解题过程 + 验算 + 引导要点。
-```
-
-排版规范：讲解以正常段落为主，列表只用于并列步骤；少用加粗、冒号、破折号、括号和连续问号，一段只讲一个意思。教学样张见 `docs/teaching/摩擦力-打印机进纸.md`。
-
+各角色技能位于同目录 `.pi/skills/*/SKILL.md`。当前每个角色是独立 Pi 会话，`spawn` 子智能体未实现（见附录 B）。
 #### 6.7.3 协作与路由规则
 
 
@@ -1232,6 +1216,8 @@ flowchart TD
 
 * 各 provider 的 key 独立保存，本地 AES 加密（密钥结合本机信息派生）。
 
+* 同一 Provider 可配置多把 key；主对话与学习模块都按 `LLM_KEY_MAX_ATTEMPTS`（默认 3，范围 1–20）限制单次请求最多尝试的 key 数，失败 key 进入冷却。
+
 * 前端密码框掩码输入、可切换显隐，回显仅显示掩码；支持更新与删除。
 
 * 保存前做一次最小调用校验 key 有效性；切换 / 删除不影响已有学习数据。
@@ -1306,12 +1292,13 @@ flowchart TD
 | --------------------------------------------------- | ----------------- |
 | usage\_id                                           | 主键                |
 | provider / model                                    | 厂商、模型             |
-| scenario                                            | 场景（答疑 / 出题 / 复盘等） |
+| scenario / subject                                  | 场景（答疑 / 出题 / 复盘等）与学科 |
 | prompt\_tokens / completion\_tokens / total\_tokens | token 用量          |
 | reasoning\_tokens                                   | 思考 token          |
 | latency\_ms                                         | 延迟                |
 | cost                                                | 估算费用（本地模型为 0）     |
 | success / error                                     | 是否成功、错误信息         |
+| key\_id / trace\_id | 命中的密钥与链路 ID |
 | created\_at                                         | 时间                |
 
 #### 6.10.2 统计维度
@@ -1320,7 +1307,7 @@ flowchart TD
 
 * 按天 / 模型 / 场景 / 学科统计调用次数、token、成本、成功率、平均延迟。
 
-* 支持累计与趋势；可设月度预算 / 配额，接近阈值告警。
+* 支持累计与趋势；月度预算 / 配额与接近阈值告警【未实现，v0.31】。
 
 * 数据取自模型响应的 usage 字段，本地模型按可用字段估算。
 
@@ -1333,7 +1320,7 @@ flowchart TD
 | GET | /api/usage/summary | 汇总（时间范围、维度）  |
 | GET | /api/usage/daily   | 每日明细         |
 | GET | /api/usage/cost    | 成本统计         |
-| GET | /api/usage/export  | 导出（CSV/JSON） |
+| GET | /api/usage/export  | 导出（CSV/JSON）；管理员可导出跨账号明细，普通用户仅导出本人 |
 
 #### 6.10.4 前端
 
@@ -1432,7 +1419,7 @@ flowchart TD
 
 * 每个会话与消息持久化到本地 SQLite，开新对话后旧会话完整保留。
 
-* 历史会话列表支持按时间分组、自动摘要标题、搜索、重命名、置顶、删除。
+* 历史会话列表支持按时间分组、搜索、重命名、置顶、删除；标题取首条消息截断，不做自动摘要。
 
 * 重新打开即加载历史消息，可在原上下文继续对话；消息分页加载，前端缓存最近会话。
 
@@ -1465,11 +1452,11 @@ flowchart TD
 
 * 麦克风录音，支持按住说话 / 点击录音，显示波形与时长。
 
-* ASR 方案：本地 faster-whisper /whisper.cpp（隐私优先）或云端 ASR API。
+* ASR 方案：本地 `sherpa-onnx Paraformer`（`sherpa-onnx-node`），只接受 16-bit PCM WAV；云端 ASR 未实现。
 
 * 识别文字进入输入框，可编辑后再发送。
 
-* 接口：POST /api/asr（音频转文字）。语音播报（TTS）可作为后续扩展。
+* 接口：GET /api/asr（能力探测）、POST /api/asr（音频转文字）。
 
 #### 6.12.4 输入处理流程
 
@@ -1492,34 +1479,34 @@ flowchart LR
 
 
 
-* 模型回复支持一键朗读，可开启自动播放。
+* 模型回复支持一键朗读；自动播放、暂停 / 恢复与逐句跟读【未实现，v0.31】，当前只有停止。
 
 
 
-| 方案                 | 说明         |
-| ------------------ | ---------- |
-| 本地 edge-tts /piper | 离线、免费，隐私优先 |
-| 云端 TTS API         | 音色丰富、效果好   |
+| 方案 | 说明 |
+| --- | --- |
+| 浏览器 speechSynthesis | 默认；零配置、离线可用 |
+| 服务端 OpenAI 兼容 `/audio/speech` | 配置 `TTS_BASE_URL` / `TTS_MODEL` 后启用；支持 `TTS_VOICE`、语速、音量参数 |
 
 
 
-* 支持音色选择、语速 / 音量调节、播放控制（暂停 / 停止）与逐句跟读，适合英语听力与发音练习。
+* 支持音色、语速、音量参数；播放控制当前只有停止。
 
-* 接口：POST /api/tts（文字转音频）。
+* 接口：GET /api/tts（能力与默认参数）、POST /api/tts（文字转音频）。
 
 #### 6.12.6 多媒体存储与清理
 
 
 
-* 图片、录音、TTS 音频统一存本地 media 目录，按日期 / 类型分目录，数据库只存路径引用。
+* 当前 `media` 目录只存储图片（上传与对话图片）；ASR 录音与 TTS 音频不落库、不持久化。
 
-* 清理策略：删除会话连带删除关联媒体；定期检测孤儿文件（无引用）并清理；可配置保留周期与存储配额，超阈值告警；图片压缩、音频统一码率。
+* 清理策略：删除会话连带删除关联媒体；定期检测孤儿文件（无引用）并清理；可配置保留周期与存储配额，超阈值告警；图片压缩。音频统一码率与统一入库未实现。
 
 * 接口：GET /api/media/storage（用量）、POST /api/media/cleanup（清理）。
 
 ### 6.13 MCP 自选接入
 
-**结论：可行。** Pi 原生支持 MCP，用户可像安装浏览器扩展一样自选接入 MCP server，其暴露的工具自动注册给智能体调用。
+**结论：可行。** 自研 @modelcontextprotocol/sdk 客户端：配置存 mcp_servers 表 → listTools 发现 → defineTool 生成 customTools 注入 createAgentSession，工具名前缀 mcp__<server>__<tool>，并同步 server/data/pi-agent/mcp.json，用户可像安装浏览器扩展一样自选接入 MCP server，其暴露的工具自动注册给智能体调用。
 
 #### 6.13.1 配置结构
 
@@ -1536,7 +1523,7 @@ flowchart LR
 }
 ```
 
-远程服务改用 transport=http/sse 并填写 url；env 中的密钥加密存储。
+远程服务改用 transport=http/sse 并填写 url；env 中的密钥加密存储。`server/data/pi-agent/mcp.json` 只同步命令 / URL / 工具开关，不写解密后的 env/headers；数据库加密不等于所有落盘副本都加密。
 
 #### 6.13.2 接入流程
 
@@ -1551,7 +1538,7 @@ flowchart TD
     E --> F[用户授权/启用]
     F --> G[智能体可调用]
     G --> H{运行}
-    H -->|断线| I[自动重连/健康检查]
+    H -->|断线| I[当前需手动重新测试；自动重连未实现]
 ```
 
 #### 6.13.3 工具发现与注册
@@ -1562,7 +1549,7 @@ flowchart TD
 
 * 以 server 名加前缀避免命名冲突，工具可单独启用 / 禁用。
 
-* 传输支持 stdio 本地进程（npx/uvx）与远程 SSE/HTTP，含断线重连、超时与健康检查。
+* 传输支持 stdio 本地进程（npx/uvx）与远程 SSE/HTTP，含连接超时；断线重连与长期健康检查【未实现，v0.31】。
 
 #### 6.13.4 安全与权限
 
@@ -1570,9 +1557,9 @@ flowchart TD
 
 * 安装前提示来源与权限风险（本地命令、远程服务）。
 
-* 敏感 env/key 加密存储，不回传给模型。
+* 敏感 env/key 加密存储，不回传给模型；stdio 子进程只继承最小运行环境，不默认下传实例密钥。
 
-* 有副作用的工具首次调用需确认，支持白名单与最小权限；远程来源校验并结合安全 SDK 防注入。
+* 配置期显式授权：无 readOnlyHint 即视为副作用，未确认返回 MCP_CONFIRMATION_REQUIRED；升级时用 server/scripts/migrate-mcp-confirmations.ts（默认 dry-run，--apply 写入）一次性回填存量已授权工具，支持白名单与最小权限；远程 URL 仅允许 http/https，可用 `MCP_ALLOWED_HOSTS` 收紧来源主机；`server/src/security/guard.ts` 仅用于对话输入注入拦截，未接入安全 SDK。
 
 #### 6.13.5 接口
 
@@ -1591,9 +1578,9 @@ flowchart TD
 
 
 
-* MCP 管理页：添加向导、连接状态、工具列表、授权开关与日志。
+* MCP 管理页：添加向导、连接状态、工具列表与授权开关；管理页日志【未实现，v0.31】。
 
-* 内置常用 MCP 推荐清单与一键安装模板（本地维护，不做中心化商店）。
+* 内置常用 MCP 推荐清单与一键安装模板【未实现，v0.31】（本地维护，不做中心化商店）。
 
 ### 6.14 统一可视化引擎（交互课件 + 自动可视化合并）
 
@@ -1601,11 +1588,11 @@ flowchart TD
 
 
 
-* 统一入口：拍照 / 提问后自动判定，优先匹配预置交互课件库（edulab），命中即调用；未命中则按题目动态生成 spec，两条路径输出统一可视化对象。
+* 统一入口：拍照 / 提问后自动判定，先做确定性建模；未命中具体结构时再匹配预置交互课件库（edulab）；两条路径输出统一可视化对象。
 
 * 统一渲染：3D 用 Three.js、函数用 function-plot、分子用 3Dmol，预置课件与动态生成共用渲染器，交互能力一致。
 
-* 统一管理：课件与生成结果在同一面板展示，支持旋转缩放、标注、辅助线、动画与截图。
+* 统一管理：课件与生成结果在同一面板展示，支持旋转缩放、标注、辅助线与截图；动画未实现。
 
 后续 6.14.1–6.14.8 为该引擎的判定、规格与渲染细节。
 
@@ -1662,12 +1649,12 @@ flowchart TD
 
 | 类型    | 渲染技术                           | 能力                          |
 | ----- | ------------------------------ | --------------------------- |
-| 立体几何  | Three.js                       | 旋转 / 缩放、点线面标注、辅助线、截面、展开、动画  |
-| 函数 2D | function-plot / SVG / GeoGebra | 显式 / 隐式 / 参数方程、坐标轴、交点、极值、面积 |
+| 立体几何 | Three.js | 旋转 / 缩放、点线面标注、辅助线、截面；展开与动画未实现 |
+| 函数 2D | function-plot / SVG（GeoGebra 未实现） | 显式 / 隐式、坐标轴、交点、不等式区域、参数滑块；极值/渐近线/切点/对称轴/分段绘制未实现 |
 | 函数 3D | Three.js 曲面                    | 二元函数曲面、等高线                  |
 | 化学分子  | 3Dmol.js                       | 分子 / 蛋白结构、球棍 / 空间填充模型       |
 | 地理    | Three.js 地形 / 地图               | 地形、等高线、地球仪、洋流大气             |
-| 生物    | 预置 3D 模型库 + 标注                 | 细胞、器官、生态系统                  |
+| 生物 | Three.js 球体 + 标签近似 | 细胞结构示意；预置生物 3D 模型库未实现 |
 | 物理    | SVG / Three.js                 | 受力、电路、光路、运动轨迹               |
 
 #### 6.14.4 生成流程
@@ -1691,7 +1678,7 @@ flowchart TD
 
 * 可视化内嵌对话，支持旋转、缩放、重置视角、全屏与截图。
 
-* 标注 / 辅助线 / 截面开关与动画播放；题目元素与模型联动高亮。
+* 标注 / 辅助线 / 截面开关与截图；动画播放与题目元素联动高亮【未实现，v0.31】。
 
 #### 6.14.6 安全与兜底
 
@@ -1701,7 +1688,7 @@ flowchart TD
 
 * spec 做类型、数值与范围校验；解析不到具体结构时不出图并提示补充方程、点、尺寸或场景，不用无关预置图硬凑。
 
-* 预置模板仅用于纯主题问题；旧版单文件 HTML 课件保持只读兼容。
+* 预置模板仅用于纯主题问题；旧版单文件 HTML 课件可查看与删除，不提供编辑。
 
 #### 6.14.7 几何辅助元素增强
 
@@ -1709,21 +1696,18 @@ flowchart TD
 
 
 
-| 辅助元素           | 说明                   |
-| -------------- | -------------------- |
-| 辅助线 / 延长线      | 连接关键点，虚线表示           |
-| 辅助平面 / 截面      | 半透明延展平面              |
-| 垂线 / 高         | 点到面 / 线垂线、垂足         |
-| 中点 / 中线 / 角平分线 | 等分标记                 |
-| 平行线            | 平移关系                 |
-| 投影             | 点在面 / 线投影及投影线        |
-| 标注             | 直角符号、角弧、等长记号、长度 / 角度 |
-| 隐藏线            | 被遮挡棱用虚线              |
-| 动点轨迹 / 旋转翻折    | 动画呈现                 |
+| 辅助元素 | 状态 | 说明 |
+| --- | --- | --- |
+| 辅助平面 / 截面 | 已实现 | 半透明延展平面 |
+| 辅助线段 | 已实现 | 连接关键点，可设虚线 |
+| 棱锥高（垂线） | 已实现 | 顶点到底面中心的垂线 |
+| 标注 | 已实现 | 点标签、长度 / 角度基础标注 |
+| 垂线 / 垂足、角平分线、中线、平行线、投影、隐藏线、动点轨迹 | 规划 | 【未实现，v0.31】 |
+| 旋转翻折动画、逐条出现理由 | 规划 | 【未实现，v0.31】 |
 
 
 
-* 模型输出每条辅助线的添加理由（为什么加、用来证什么），跟随讲解步骤逐条出现。
+* 辅助线可带 `reason` 字段说明添加理由；按讲解步骤逐条出现【未实现，v0.31】。
 
 * spec 用 auxiliary 数组，kind 区分类型，style 控制虚线 / 颜色 / 透明度。
 
@@ -1751,9 +1735,9 @@ flowchart TD
 
 * 多函数同图：不同颜色 / 线型 / 图例，可单独显隐。
 
-* 自动标注：交点（解方程 f=g）、零点、极值、渐近线、切点、对称轴。
+* 自动标注：交点（解方程 f=g）、零点、不等式区域与参数滑块已实现；极值、渐近线、切点、对称轴【未实现，v0.31】。
 
-* 数形结合：方程看交点、不等式看区域填充、分段函数分段绘制。
+* 数形结合：方程看交点、不等式看区域填充已实现；分段函数分段绘制【未实现，v0.31】。
 
 * 动态：参数滑块驱动动直线 / 动曲线，观察根与交点变化；并与解析几何（直线与圆锥曲线）联动。
 
@@ -1768,10 +1752,10 @@ flowchart TD
 | 类别   | 措施                                | 优先级 | 主要收益          |
 | ---- | --------------------------------- | --- | ------------- |
 | 流式体验 | 全程 SSE，首字优先返回（TTFT）               | P0  | 降低感知等待        |
-| 模型路由 | 快模型默认、思考强度默认调低                    | P0  | 降低实际生成耗时      |
+| 模型路由 | 快模型仅 `routing` 场景且默认关闭；主对话用所选模型 | P1 | 降低轻量场景耗时 |
 | 上下文  | 精简 RAG 片段、历史与提示词                  | P0  | 减少 prefill 耗时 |
-| 缓存   | 语义缓存、embedding 缓存、预热              | P1  | 命中即秒回         |
-| 检索链路 | 简化 Cross-Encoder、减少 agent 层数、并行调用 | P1  | 减少串行等待        |
+| 缓存 | 检索结果缓存、精确指纹答案缓存、embedding 缓存 | P1 | 命中即秒回 |
+| 检索链路 | 简化 Cross-Encoder、减少 agent 层数 | P1 | 减少串行等待 |
 | 工程网络 | 就近节点、连接池、本地 GPU / 量化              | P1  | 降低网络与推理延迟     |
 
 #### 6.15.2 关键措施说明
@@ -1780,13 +1764,13 @@ flowchart TD
 
 * **首字优先**：后端先建立 SSE 连接并推送起始事件，模型流式输出，用户无需等待完整结果。
 
-* **模型分级路由**：简单问题走 mini/flash 等快模型，难题才用大模型或推理模型；推理模型默认 low 思考强度，深度任务再调高；高频简单问答可用本地小模型，零网络往返。
+* **模型分级路由**：`FAST_MODEL_ID` 仅用于 `routing` 等轻量场景且默认关闭；主对话未接入快模型分级，仍使用所选对话模型。
 
-* **精简输入**：RAG 只传 Top 3–5 最相关片段；历史对话摘要加截断，只保留近期与摘要；画像 / 记忆按需注入，控制 context\_length。
+* **精简输入**：RAG 只传 Top 3–5 最相关片段；历史按条数回放 + 单条截断（`CHAT_HISTORY_LIMIT=16`、`HISTORY_ITEM_MAX_CHARS=6000`），不做摘要生成；画像 / 记忆按需注入。
 
-* **缓存与预热**：语义缓存让相似问题直接命中答案；prompt 哈希精确缓存；embedding 结果缓存，文档不变不重算；常见知识点讲解预生成。
+* **缓存与预热**：检索结果缓存（相似度阈值）+ 精确指纹答案缓存 + embedding 缓存；答案语义缓存与常见知识点预生成未实现。
 
-* **检索与链路**：简单查询跳过 Cross-Encoder（额外模型推理）或换轻量 reranker；减少子智能体跳转层数，简单问题单轮直出；可并行的工具与子任务并发执行；限制 max\_tokens 避免冗长。
+* **检索与链路**：简单查询跳过 Cross-Encoder；减少子智能体跳转层数，简单问题单轮直出；工具并行调用未实现；限制 `max_tokens` 避免冗长。
 
 * **工程网络**：选择就近低延迟 endpoint，连接池 keep-alive 复用；本地模型用 GPU 与量化加速，媒体 / 模型服务本地部署减少往返。
 
@@ -1909,6 +1893,12 @@ flowchart TD
 | LOGIN_LOCK_MIN | 15 | 锁定时长 |
 | TRUST_PROXY | 1 | 信任反向代理的转发头，仅在有可信代理时开启 |
 
+#### 实现新增配置项（v0.31）
+
+实现中新增（相对 v0.30 规划态）的配置项：`CSRF_ENABLED`、`CSRF_ALLOWED_ORIGINS`、`BOOTSTRAP_LOCAL_ONLY`、`MCP_CONFIRM_SIDE_EFFECTS`、`DOCUMENT_PII_REDACT`、`TRACE_LOG`、`AGENT_MAX_TOOL_STEPS`、`AGENT_WALL_CLOCK_MS`、`AGENT_TOKEN_BUDGET`、`RAG_TIMEOUT_MS`、`MILVUS_TIMEOUT_MS`、`RAG_RETRY_MAX`、`TASK_TIMEOUT_MS`、`TASK_RETRY_MAX`、`LLM_KEY_MAX_ATTEMPTS`、`FAST_MODEL_ID`、`SSE_RETRY_MAX` / `VITE_SSE_RETRY_MAX`、`TTS_DEFAULT_VOLUME`、`EVAL_ENABLE_ADVANCED`、`CHAT_HISTORY_LIMIT`、`HISTORY_ITEM_MAX_CHARS`、`RAG_TOP_K` / `RAG_CANDIDATE_K` / `RAG_RECALL_LIMIT`、`RERANK_MIN_QUERY_CHARS`、`ROUTE_LLM_MIN_CHARS`。
+
+默认值以 `server/src/config.ts`、`server/src/tasks/queue.ts`、`server/tsconfig.json` 为准；完整表见 `施工文档-EduPi代码整改.md` §3 与 `README.md` 配置节。
+
 #### 6.16.10 验收标准
 
 1. 首次初始化后可用管理员登录；关闭注册后公开注册接口返回 403。
@@ -1940,94 +1930,143 @@ flowchart TD
 
 ### 7.1 数据模型关系图（ER 图）
 
-
+> 下图为当前 SQLite 实际 schema（`server/src/store.ts`），不含规划表；个人资源统一通过 `learner_id` 归属。
 
 ```mermaid
 erDiagram
-    USER ||--|| LEARNER : "profile"
-    USER ||--o{ SESSION : "owns"
-    USER ||--o{ INVITE : "creates"
+    USER ||--|| LEARNER : "learner_id = user_id"
+    USER ||--o{ SESSION : owns
     LEARNER ||--o{ MEMORY : has
-    LEARNER ||--o{ QUIZ_SESSION : takes
+    LEARNER ||--o{ QUESTION : owns
     LEARNER ||--o{ WRONG_RECORD : owns
     LEARNER ||--o{ MASTERY : tracks
-    QUESTION_BANK ||--o{ QUESTION : contains
     QUESTION ||--o{ WRONG_RECORD : "referenced by"
-    QUESTION ||--o{ MASTERY : "mapped to"
+    LEARNER ||--o{ QUIZ_SESSION : takes
     QUIZ_SESSION ||--o{ QUIZ_ANSWER : includes
     QUESTION ||--o{ QUIZ_ANSWER : "answered in"
     LEARNER ||--o{ EXAM_PAPER : takes
     EXAM_PAPER ||--o{ EXAM_QUESTION : contains
     EXAM_PAPER ||--o{ EXAM_REVIEW : has
-    EXAM_QUESTION ||--o{ WRONG_RECORD : "feeds"
-    LEARNER ||--o{ USAGE_RECORD : generates
     LEARNER ||--o{ CONVERSATION : owns
     CONVERSATION ||--o{ MESSAGE : contains
+    LEARNER ||--o{ DOCUMENT : owns
+    DOCUMENT ||--o{ CHUNK : contains
+    DOCUMENT ||--o{ OCR_JOB : has
+    OCR_JOB ||--o{ OCR_PAGE : contains
+    LEARNER ||--o{ MEDIA : owns
+    LEARNER ||--o{ VISUALIZATION : owns
+    LEARNER ||--o{ USAGE_RECORD : generates
+    MESSAGE }o--o| VISUALIZATION : references
 
+    USER {
+        string user_id PK
+        string username
+        string username_norm
+        string phone
+        string email
+        string display_name
+        string role
+        string status
+        string password_hash
+        int must_change_password
+        int failed_count
+        int locked_until
+        int last_login_at
+        int created_at
+        int updated_at
+    }
+    SESSION {
+        string session_id PK
+        string user_id FK
+        string token_hash
+        int created_at
+        int last_seen_at
+        int expires_at
+        int absolute_expires_at
+        int revoked_at
+    }
     LEARNER {
         string learner_id PK
         string name
         string grade
         string subjects
-        datetime created_at
+        int created_at
     }
     MEMORY {
         string memory_id PK
         string learner_id FK
         string type
         text content
-        datetime updated_at
-    }
-    QUESTION_BANK {
-        string bank_id PK
-        string source
-        string subject
+        int updated_at
     }
     QUESTION {
         string question_id PK
-        string bank_id FK
+        string bank_id
+        string learner_id FK
+        string subject
         string knowledge_point
         string difficulty
         text content
+        text options
         text answer
+        text explanation
+        string source
+        int created_at
     }
     WRONG_RECORD {
         string record_id PK
         string learner_id FK
-        string question_id FK
+        string question_id
+        text question_snapshot
+        text student_answer
         string reason
         int review_count
-        datetime next_review
+        float ease
+        int interval_days
+        int next_review
+        int created_at
+        int last_review
     }
     MASTERY {
-        string mastery_id PK
-        string learner_id FK
-        string question_id FK
+        string learner_id PK
+        string knowledge_point PK
         float probability
-        datetime updated_at
+        int correct_count
+        int wrong_count
+        int updated_at
     }
     QUIZ_SESSION {
         string session_id PK
         string learner_id FK
         string type
-        int score
-        datetime started_at
+        string title
+        string subject
+        int total
+        float score
+        int duration_min
+        string status
+        int started_at
+        int finished_at
+        text question_ids
     }
     QUIZ_ANSWER {
         string answer_id PK
         string session_id FK
-        string question_id FK
-        bool is_correct
+        string question_id
+        text student_answer
+        int is_correct
+        int created_at
     }
     EXAM_PAPER {
         string exam_id PK
         string learner_id FK
         string name
         string subject
-        datetime exam_date
+        string exam_date
         float total_score
         float my_score
         int duration
+        string status
     }
     EXAM_QUESTION {
         string exam_question_id PK
@@ -2036,11 +2075,12 @@ erDiagram
         string question_type
         float full_score
         float got_score
-        bool is_correct
+        int is_correct
         text student_answer
         text correct_answer
         string error_reason
         string knowledge_point
+        text content
     }
     EXAM_REVIEW {
         string review_id PK
@@ -2048,27 +2088,17 @@ erDiagram
         text summary
         text loss_analysis
         text suggestions
-        datetime generated_at
-    }
-    USAGE_RECORD {
-        string usage_id PK
-        string learner_id FK
-        string provider
-        string model
-        string scenario
-        int total_tokens
-        float cost
-        int latency_ms
-        bool success
-        datetime created_at
+        text report
+        int generated_at
     }
     CONVERSATION {
         string conversation_id PK
         string learner_id FK
         string title
-        bool pinned
-        datetime created_at
-        datetime updated_at
+        int pinned
+        int title_auto
+        int created_at
+        int updated_at
     }
     MESSAGE {
         string message_id PK
@@ -2076,49 +2106,88 @@ erDiagram
         string role
         string msg_type
         text content
-        string attachments
-        datetime created_at
+        text attachments
+        string agent
+        text citations
+        string visualization_id FK
+        int created_at
     }
-    USER {
-        string user_id PK
-        string username
-        string username_norm
-        string email
-        string email_norm
-        datetime email_verified_at
-        string display_name
-        string role
+    DOCUMENT {
+        string document_id PK
+        string learner_id FK
+        string filename
+        string file_type
+        int size
+        string hash
+        string subject
+        string tags
+        string source_path
         string status
-        string password_hash
-        int must_change_password
-        int totp_enabled
-        datetime terms_accepted_at
-        datetime deleted_at
-        datetime created_at
-        datetime last_login_at
+        int chunk_count
+        string error
+        int created_at
     }
-    SESSION {
-        string session_id PK
-        string user_id FK
-        string token_hash
-        datetime created_at
-        datetime last_seen_at
-        datetime expires_at
-        datetime absolute_expires_at
-        datetime revoked_at
+    OCR_JOB {
+        string document_id PK
+        string learner_id FK
+        string engine
+        string status
+        int total_pages
+        int done_pages
+        int low_confidence
+        int failed_pages
     }
-    INVITE {
-        string invite_id PK
-        string code_hash
-        string created_by FK
-        int max_uses
-        int used_count
-        datetime expires_at
+    OCR_PAGE {
+        string document_id PK
+        int page PK
+        string status
+        string engine
+        text markdown
+        float confidence
+        string image_file
+        int width
+        int height
+        int updated_at
+    }
+    MEDIA {
+        string media_id PK
+        string learner_id FK
+        string filename
+        string stored_name
+        string mime
+        int size
+        string hash
+        int created_at
+    }
+    VISUALIZATION {
+        string visualization_id PK
+        string learner_id FK
+        string type
+        string title
+        text spec
+        string source
+        int created_at
+    }
+    USAGE_RECORD {
+        string usage_id PK
+        string learner_id FK
+        string provider
+        string model
+        string scenario
+        string subject
+        int prompt_tokens
+        int completion_tokens
+        int total_tokens
+        int reasoning_tokens
+        int latency_ms
+        float cost
+        int success
+        string error
+        string key_id
+        string trace_id
+        int created_at
     }
 ```
-
-> 图中只画了账号相关的核心实体；资料、切片、题库、媒体、可视化、后台任务等个人资源统一通过 `learner_id = user_id` 归属，详见 7.3 的隔离矩阵。
-
 ### 7.2 存储策略
 
 
@@ -2145,7 +2214,7 @@ erDiagram
 
 现有已带 `learner_id` 的表直接复用，值改为当前 `user_id`：memories、wrong_records、mastery、quiz_sessions、usage_records、conversations、learning_plans、daily_practices。
 
-需要新增 `learner_id NOT NULL` 的表：documents、questions、exam_papers、courseware、media、visualizations、tasks。以下表不单独加字段，通过父资源判断归属：chunks（document）、quiz_answers（quiz_session）、exam_questions / exam_reviews（exam_paper）、messages（conversation）、ocr_jobs / ocr_pages（document）。
+需要新增 `learner_id NOT NULL` 的表：documents、questions、exam_papers、courseware、media、visualizations、tasks。以下表不单独加字段，通过父资源判断归属：chunks（document）、quiz_answers（quiz_session）、exam_questions / exam_reviews（exam_paper）、messages（conversation）、ocr_jobs / ocr_pages（document）。`questions`、`ocr_jobs` 等当前均已带 `learner_id`，以 7.1 的实际 schema 为准。
 
 实例级表不加 `learner_id`，仅管理员可操作：model_settings、provider_keys、mcp_servers、storage_cleanups。
 
@@ -2326,6 +2395,14 @@ flowchart TD
 
 11. 公网部署通过 HTTPS、Secure Cookie 与每日备份检查；隐私政策、用户协议与联系方式可访问。
 
+12. CSRF、bootstrap 本机限定、MCP 配置期确认与存量回填可通过 npm run auth:check 与 check-mcp.ts 验证。
+
+13. Agent 循环具备工具步数上限 / 墙钟上限 / token 预算与 incomplete 人工接管点，可通过 check-resilience.ts 验证。
+
+14. 检索外部调用有显式超时、重试与降级；quiz 与 analysis 后台任务均可被 watchdog 中止。
+
+15. SSE 断线重发按 (learner_id, clientRequestId) 去重，可通过 check-sse-idempotency.ts 与 check-config-keys.ts 验证。
+
 
 
 ***
@@ -2410,7 +2487,7 @@ flowchart LR
 | 编号  | 主题        | 目标与产出                                            | 验收           | 前置  |
 | --- | --------- | ------------------------------------------------ | ------------ | --- |
 | S05 | 文档解析切片    | /api/documents 上传，PDF/Word/MD 解析与 chunk          | 切片结果正确、带元数据  | S04 |
-| S06 | Milvus 灌库 | 建 collection，BGE-M3 dense + BM25 Function sparse | 数据可写入并检索     | S05 |
+| S06 | Milvus 灌库 | 建 collection，text-embedding-v4 dense + BM25 Function sparse | 数据可写入并检索 | S05 |
 | S07 | 混合检索闭环    | 混合检索 + RRFRanker+Cross-Encoder + 引用，前端问答 / 引用展示  | 带引用 RAG 问答跑通 | S06 |
 
 **阶段 D：记忆与错题（可与 E 并行）**
@@ -2430,7 +2507,7 @@ flowchart LR
 | --- | ------- | ------------------------------------ | -------- | --- |
 | S10 | 出题工具    | quiz.generate + 前端答题组件               | 可出题并记录作答 | S07 |
 | S11 | 题库与模考   | bank.extract、模考计时 / 交卷 / 解析          | 完整模考流程跑通 | S10 |
-| S12 | BKT 掌握度 | BKT 算法、mastery.update、掌握度页面（ECharts） | 掌握度随作答更新 | S11 |
+| S12 | BKT 掌握度 | BKT 算法、mastery.update、掌握度页面（Element Plus 进度） | 掌握度随作答更新 | S11 |
 
 **阶段 F：子智能体与编排**
 
@@ -2439,7 +2516,7 @@ flowchart LR
 | 编号  | 主题   | 目标与产出                                  | 验收         | 前置      |
 | --- | ---- | -------------------------------------- | ---------- | ------- |
 | S13 | 子智能体 | Tutor/Quizzer/Analyst/Solver 封装、提示词与路由 | 任务可正确分派    | S09、S12 |
-| S14 | 双层编排 | Router/Worker、可续任务、WebSocket           | 后台任务可续、不阻塞 | S13     |
+| S14 | 双层编排 | Router/Worker【未实现，v0.31】、可续任务、WebSocket           | 后台任务可续、不阻塞 | S13     |
 
 **阶段 G：考试复盘**
 
@@ -2469,7 +2546,7 @@ flowchart LR
 | S20 | 图片输入    | 拍照 / 上传、视觉模型 / OCR、图片存储                        | 可发图并获解答     | S19     |
 | S21 | 语音能力    | ASR 识别 + TTS 播报                                | 语音可输入、回复可朗读 | S19     |
 | S22 | 存储治理    | 媒体清理、配额、孤儿文件回收                                 | 用量可查、可清理    | S20、S21 |
-| S23 | 性能优化与压测 | 语义缓存、模型分级路由、上下文精简、Cross-Encoder 裁剪，TTFT/P95 压测 | 延迟达标、缓存命中   | S22     |
+| S23 | 性能优化与压测 | 检索结果缓存、上下文精简、Cross-Encoder 裁剪，TTFT/P95 压测 | 延迟达标、缓存命中 | S22 |
 
 > 提速为贯穿性要求：P0 措施（流式、快模型、精简上下文）自 S04 起即执行，S23 集中优化与压测。
 
@@ -2497,7 +2574,7 @@ flowchart LR
 
 * 里程碑 5（S22）：多模态输入、语音与历史会话体验完善。
 
-* 里程碑 6（S23）：响应延迟达标（TTFT/P95），语义缓存生效。
+* 里程碑 6（S23）：响应延迟达标（TTFT/P95），检索结果缓存生效。
 
 * 里程碑 7（S34）：账号注册登录与数据隔离生效，完成 HTTPS、备份与基本账号管理，可按个人网站上线。
 
@@ -2520,6 +2597,8 @@ flowchart LR
 ## 14. 逐次对话详细实施手册
 
 每次对话开场先读 `PROGRESS.md` 与本章对应编号，按步骤执行；收尾更新进度并 git commit。
+
+> 本章 S01–S34 是历史实施记录，保留当时的分步计划与验收口径；与当前代码不一致处，以第 5–7 章和附录 B 为准。
 
 ### 阶段 A：环境与骨架
 
@@ -2635,7 +2714,7 @@ flowchart LR
 
 1. 安装 @zilliz/milvus2-sdk-node，创建 collection 与 schema（dense 1024 + sparse + 元数据）。
 
-2. 接入 BGE-M3 生成 dense，配置 BM25 Function 生成 sparse。
+2. 接入 text-embedding-v4 生成 dense，配置 BM25 Function 生成 sparse。
 
 3. 批量 upsert 并建 HNSW 索引，文档状态置 indexed。
 
@@ -2747,7 +2826,7 @@ flowchart LR
 
 2. 作答后更新各知识点掌握概率。
 
-3. 前端掌握度页（ECharts 热力 / 进度）。
+3. 前端掌握度页（Element Plus 进度条）。
 
 * 产出：BKT 算法、掌握度页。
 
@@ -2873,7 +2952,7 @@ flowchart LR
 
 1. SQLite 建 CONVERSATION、MESSAGE 表（对应 7.1）。
 
-2. 对话落库并自动生成标题摘要。
+2. 对话落库并生成首条消息截断标题。
 
 3. 实现历史列表（搜索 / 重命名 / 置顶 / 删除）、重开加载与继续对话。
 
@@ -2943,9 +3022,9 @@ flowchart LR
 
 * 步骤：
 
-1. 实现语义缓存（相似问题命中）、prompt 精确缓存与 embedding 缓存。
+1. 实现检索结果缓存、prompt 精确缓存与 embedding 缓存。
 
-2. 落地模型分级路由（快模型默认、思考强度调低）与上下文精简（RAG Top 3–5、历史摘要截断）。
+2. 落地上下文精简（RAG Top 3–5、历史按条数回放 + 单条截断）；快模型分级路由未接入主对话。
 
 3. 简单查询跳过 Cross-Encoder，减少 agent 层数，工具并行调用。
 
@@ -3029,3 +3108,26 @@ flowchart LR
 * SuperAgent（当前为安全 SDK）：[https://github.com/superagent-ai/superagent](https://github.com/superagent-ai/superagent)
 
 * DSH（DeepSeek Harness）：[https://dshai.org/](https://dshai.org/) ；官方介绍：[https://www.deepseek.com/harness/en/](https://www.deepseek.com/harness/en/)
+
+## 附录 B：实现对齐清单（v0.31）
+
+| 维度 | 实现文件或模块 | 与规划态的差异 |
+| --- | --- | --- |
+| 分层架构 | `server/src/**` 扁平模块 + 单 `AgentSession` + `server/agent-workspace/roles/<role>/` 角色目录 | 规划态为 `~/.pi/agent/extensions/edu-agent/` 扩展 + 多子智能体分层；实现为扁平模块 + 单层路由 |
+| 技术选型 | `typebox@1.3.27`、`node:sqlite`、自研 `@modelcontextprotocol/sdk` 客户端、`text-embedding-v4`、`gte-rerank-v2`、Node.js 24 | TypeBox / better-sqlite3 / pi-mcp-adapter / pi-subagents / BGE / E5 / Cohere 等替换为清单所列实现 |
+| 扩展目录 | `server/src/**`（rag/、learning/、auth/、chat/、mcp/、documents/、config.ts、pi.ts、store.ts）、`server/agent-workspace/roles/<role>/.pi/skills/`、`server/data/pi-agent/mcp.json` | 规划态 `edu-agent/src/hooks/`、`skills/`、扩展根 `mcp.json`；实现无 `src/hooks/`，`mcp.json` 生成到 `server/data/pi-agent/`，Skills 按角色分发 |
+| Hooks | `server/src/pi.ts`、`server/src/agents/roles.ts`、`server/src/chat/handler.ts`、`server/src/config.ts` | 未注册 Pi 自定义 hook 扩展；四个规划态 hook 由等价实现替代（见 §6.4） |
+| MCP | `server/src/mcp/`、`mcp_servers` 表、`defineTool` customTools、`server/scripts/migrate-mcp-confirmations.ts`、`server/src/security/guard.ts` | 非 Pi 原生；自研 SDK 客户端，工具名前缀 `mcp__<server>__<tool>`；配置期显式授权，未接入安全 SDK |
+| 子智能体 | `server/src/agents/roles.ts`（角色目录）、`server/src/agents/router.ts`（规则 + LLM 路由） | 规划态 pi-subagents spawn；spawn 子智能体未实现，仅角色提示词 + 规则 / LLM 路由 |
+| Router-Worker | `server/src/agents/router.ts`（7 条带权正则 + LLM 分类）、`server/src/tasks/queue.ts`（单 Worker 队列） | 双层 Router/Worker 运行时、可续子会话、append-only 会话日志、外部 Watchdog 均未实现；watchdog 用 AbortController 真正中止 |
+| 数据模型 | `server/src/store.ts`、`mcp_servers` 表 | 移除 `INVITE` 实体与关系、`email_verified_at` / `totp_enabled` / `terms_accepted_at` 三列 |
+| 配置项 | `server/src/config.ts`、`server/src/tasks/queue.ts`、`server/tsconfig.json` | 新增 `CSRF_ENABLED`、`AGENT_*`、`RAG_*`、`TASK_*`、`EVAL_*` 等（见 §6.16.9），默认值以上述文件为准 |
+| 接口 | `/api/reviews/recognize`、`/api/reviews/{id}`、`/api/reviews/{id}/analyze` | `/api/exam/recognize` 与 `/api/exam/{id}/review` 更名 / 拆分；完整清单见 README「主要 API」 |
+| 页面 | 前端路由：`/documents`、`/quiz`、`/tasks`、`/visualize`、`/settings`、`/usage`、`/storage`、`/mcp`、首页学习台 | 课件页合并（`/courseware` 重定向到 `/visualize`）；隐私 / 协议页仅占位视图，正文 / 备案 / 联系方式待提供，登记为上线阻断 |
+| 评测 | 评测脚本 + `EVAL_ENABLE_ADVANCED`、`ROUTE_LLM_MIN_CHARS` | 已实现 Hit@1/3/5、Recall@5、MRR、P50/P95、Precision@5、nDCG@5、Citation Precision@5；引用正确率答案级不可计算；四方案离线对比未实现；8 题小样本，缺失输出「不可计算」且退出码 0 |
+| 有界自主 | `AGENT_MAX_TOOL_STEPS`、`AGENT_WALL_CLOCK_MS`、`AGENT_TOKEN_BUDGET`、`incomplete` 人工接管点 | 规划态无工具步数 / 墙钟 / token 上限；实现加入上限与接管点，`check-resilience.ts` 验证 |
+| 可观测 | `TRACE_LOG` | 规划态为健康检查 + 外部 uptime；实现新增 `TRACE_LOG` 追踪开关 |
+| 幂等 | `check-sse-idempotency.ts`、SSE `(learner_id, clientRequestId)` 去重 | 规划态未定义断线重发去重；实现按二元组去重，`check-config-keys.ts` 验证 |
+| 错误响应 | `MCP_CONFIRMATION_REQUIRED`；统一错误响应（不含堆栈 / 数据库细节） | 规划态未定义 MCP 确认错误码；实现返回 `MCP_CONFIRMATION_REQUIRED` 且错误响应不泄露细节 |
+
+> 本附录与正文冲突时，以本附录与当前代码为准；代码为最终事实基线。

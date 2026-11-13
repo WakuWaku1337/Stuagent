@@ -1,3 +1,4 @@
+import './lib/same-origin-fetch.ts';
 import { readFile } from 'node:fs/promises';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
@@ -21,7 +22,7 @@ async function main() {
   const ttsRes = await fetch(`${BASE}/api/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: '你好，这是语音播报测试。', rate: 1.1 }),
+    body: JSON.stringify({ text: '你好，这是语音播报测试。', rate: 1.1, volume: 0.8 }),
   });
   const contentType = ttsRes.headers.get('content-type') ?? '';
   let ttsOk = false;
@@ -29,7 +30,7 @@ async function main() {
   if (contentType.includes('application/json')) {
     const tts = await ttsRes.json();
     ttsMode = tts.mode;
-    ttsOk = ttsRes.status === 200 && (tts.mode === 'browser' || tts.mode === 'server');
+    ttsOk = ttsRes.status === 200 && (tts.mode === 'browser' || tts.mode === 'server') && tts.volume === 0.8;
   } else {
     ttsMode = 'server';
     ttsOk = ttsRes.status === 200 && (await ttsRes.arrayBuffer()).byteLength > 0;

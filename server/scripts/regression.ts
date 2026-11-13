@@ -1,3 +1,4 @@
+import './lib/same-origin-fetch.ts';
 import { readFile } from 'node:fs/promises';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
@@ -47,6 +48,18 @@ const getJson = async (path: string) => {
   const res = await fetch(BASE + path);
   return { status: res.status, body: await res.json() };
 };
+
+// B0-6：对话层与 Pi 会话层必须读同一个历史回放配置，避免 16/24 口径再次漂移。
+await check('history replay shares one config source', async () => {
+  const handler = await readFile(new URL('../src/chat/handler.ts', import.meta.url), 'utf8');
+  const pi = await readFile(new URL('../src/pi.ts', import.meta.url), 'utf8');
+  return (
+    handler.includes('historyReplayLimit()') &&
+    pi.includes('historyReplayLimit()') &&
+    !/slice\(-24\)/.test(pi) &&
+    !/\b8000\b/.test(pi)
+  );
+});
 
 await check('health', async () => (await getJson('/health')).body.status === 'ok');
 await check('model configured', async () => (await getJson('/api/model')).body.configured === true);

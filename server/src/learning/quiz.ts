@@ -42,7 +42,10 @@ export async function generateQuiz(input: {
   difficulty?: string;
   count?: number;
   subject?: string;
+  signal?: AbortSignal;
 }): Promise<QuestionRow[]> {
+  // watchdog 触发后不再发起模型调用；已发出的云端推理不可撤回，只能中止本地等待与后续步骤。
+  if (input.signal?.aborted) throw new DOMException('出题任务已取消', 'AbortError');
   const count = Math.min(Math.max(input.count ?? 3, 1), 10);
   const recommended = recommendDifficulty(input.knowledgePoint);
   const difficulty =
@@ -57,7 +60,8 @@ export async function generateQuiz(input: {
       role: 'user',
       content: `请围绕知识点「${input.knowledgePoint}」出 ${count} 道${difficulty}难度的单选题${input.subject ? `，学科：${input.subject}` : ''}。`,
     },
-  ], { scenario: 'quiz', subject: input.subject });
+  ], { scenario: 'quiz', subject: input.subject, signal: input.signal });
+  if (input.signal?.aborted) throw new DOMException('出题任务已取消', 'AbortError');
   const items = result.questions ?? [];
   if (items.length === 0) throw new Error('模型未返回题目');
   return saveQuestions(items, {

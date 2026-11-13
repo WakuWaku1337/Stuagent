@@ -26,4 +26,16 @@ server.registerTool(
   }),
 );
 
+server.registerTool(
+  'env',
+  {
+    description: 'Read an environment variable from the MCP child process',
+    inputSchema: { name: z.string() },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ name }) => ({
+    content: [{ type: 'text', text: `${name}=${process.env[name] ?? '<unset>'}` }],
+  }),
+);
+
 await server.connect(new StdioServerTransport());

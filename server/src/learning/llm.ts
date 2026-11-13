@@ -1,5 +1,5 @@
 import type { ProviderModel, ReasoningLevel } from '../settings/providers.ts';
-import { findProvider, modelOrDefault } from '../settings/providers.ts';
+import { findProvider, modelForScenario, modelOrDefault } from '../settings/providers.ts';
 import {
   getKeySecret,
   getScenarioParams,
@@ -12,6 +12,7 @@ import {
   type ResolvedKey,
 } from '../settings/store.ts';
 import { recordUsage } from '../usage/store.ts';
+import { LLM_KEY_MAX_ATTEMPTS } from '../config.ts';
 
 export type LlmRole = 'system' | 'user' | 'assistant';
 export type LlmContent =
@@ -310,10 +311,10 @@ export async function callLlm(options: LlmCallOptions): Promise<LlmResult> {
   const providerId = options.provider ?? settings.provider;
   const provider = findProvider(providerId);
   if (!provider) throw new Error(`Provider 不存在：${providerId}`);
-  const modelId = options.model ?? settings.model;
+  const scenario = options.scenario ?? 'chat';
+  const modelId = modelForScenario(providerId, scenario, options.model ?? settings.model);
   const model = modelOrDefault(providerId, modelId);
   const baseUrl = normalizeBaseUrl(options.baseUrl ?? settings.baseUrl ?? provider.baseUrl);
-  const scenario = options.scenario ?? 'chat';
   const scenarioParams = getScenarioParams(scenario);
   const temperature = options.temperature ?? scenarioParams.temperature;
   const topP = options.topP ?? scenarioParams.topP;
@@ -329,7 +330,7 @@ export async function callLlm(options: LlmCallOptions): Promise<LlmResult> {
 
   let lastError: Error | null = null;
   const failures: string[] = [];
-  for (const key of usable) {
+  for (const key of usable.slice(0, LLM_KEY_MAX_ATTEMPTS)) {
     if (options.signal?.aborted) throw new DOMException('已取消', 'AbortError');
     markKeyUsed(key.key_id);
     const started = Date.now();

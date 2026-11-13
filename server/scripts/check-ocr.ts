@@ -1,4 +1,5 @@
 /** 扫描件 OCR 验收：上传 → 异步进度 → 原图 → 低置信校对 → 写回重新入库 */
+import './lib/same-origin-fetch.ts';
 import { readFile } from 'node:fs/promises';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';

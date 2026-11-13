@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { Connection, Delete, EditPen, Plus, Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
+  confirmMcpTool,
   createMcpServer,
   deleteMcpServer,
   fetchMcpServers,
@@ -239,6 +240,29 @@ async function toggleTool(server: McpServerView, tool: McpToolInfo, value: strin
   }
 }
 
+async function confirmTool(server: McpServerView, tool: McpToolInfo) {
+  const key = `${server.server_id}:${tool.name}`;
+  try {
+    await ElMessageBox.confirm(
+      `工具「${tool.name}」可能修改外部状态。确认授权后，智能体可以直接调用它。`,
+      '确认副作用工具',
+      { type: 'warning', confirmButtonText: '确认授权', cancelButtonText: '取消' },
+    );
+  } catch {
+    return;
+  }
+  togglingTool.value = key;
+  try {
+    const { server: updated } = await confirmMcpTool(server.server_id, tool.name);
+    replaceServer(updated);
+    ElMessage.success('已确认该工具');
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error));
+  } finally {
+    togglingTool.value = '';
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -322,6 +346,25 @@ onMounted(load);
             >
               <code>{{ tool.name }}</code>
             </el-checkbox>
+            <el-tag v-if="tool.side_effect" size="small" type="warning" effect="plain">副作用</el-tag>
+            <el-tag
+              v-if="tool.side_effect && tool.confirmed_at"
+              size="small"
+              type="success"
+              effect="plain"
+            >
+              已确认
+            </el-tag>
+            <el-button
+              v-if="tool.enabled && tool.side_effect && !tool.confirmed_at"
+              text
+              size="small"
+              type="primary"
+              :loading="togglingTool === `${server.server_id}:${tool.name}`"
+              @click="confirmTool(server, tool)"
+            >
+              确认授权
+            </el-button>
             <span class="mcp-tool-desc">{{ tool.description || '无描述' }}</span>
           </div>
         </div>
@@ -569,8 +612,9 @@ onMounted(load);
 
 .mcp-tool {
   display: flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   min-width: 0;
 }
 

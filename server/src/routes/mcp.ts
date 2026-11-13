@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import {
   McpError,
+  confirmMcpTool,
   createMcpServer,
   deleteMcpServer,
   listMcpServers,
@@ -18,12 +19,10 @@ mcp.use('*', requireAdmin);
 
 function errorResponse(c: Context, error: unknown) {
   if (error instanceof McpError) {
-    return c.json({ code: error.code, message: error.message }, error.status as 400);
+    return c.json({ code: error.code, error: error.message, message: error.message }, error.status as 400);
   }
-  return c.json(
-    { code: 'MCP_ERROR', message: error instanceof Error ? error.message : String(error) },
-    500,
-  );
+  const message = error instanceof Error ? error.message : String(error);
+  return c.json({ code: 'MCP_ERROR', error: message, message }, 500);
 }
 
 mcp.get('/servers', (c) => c.json({ servers: listMcpServers() }));
@@ -103,10 +102,18 @@ mcp.get('/tools', (c) => c.json({ tools: mcpTools() }));
 mcp.put('/servers/:id/tools/:toolName', async (c) => {
   const body = await c.req.json<{ enabled?: boolean }>().catch(() => null);
   if (!body || typeof body.enabled !== 'boolean') {
-    return c.json({ code: 'INVALID_ENABLED', message: 'enabled 必须是布尔值' }, 400);
+    return c.json({ code: 'INVALID_ENABLED', error: 'enabled 必须是布尔值', message: 'enabled 必须是布尔值' }, 400);
   }
   try {
     return c.json({ server: setMcpToolEnabled(c.req.param('id'), c.req.param('toolName'), body.enabled) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+mcp.post('/servers/:id/tools/:toolName/confirm', (c) => {
+  try {
+    return c.json({ server: confirmMcpTool(c.req.param('id'), c.req.param('toolName')) });
   } catch (error) {
     return errorResponse(c, error);
   }

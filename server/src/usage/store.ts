@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
 import { getSettings } from '../settings/store.ts';
 import { currentLearnerId } from '../learning/context.ts';
+import { currentTraceId } from '../trace.ts';
 
 export interface UsageInput {
   provider: string;
@@ -17,6 +18,7 @@ export interface UsageInput {
   success?: boolean;
   error?: string | null;
   keyId?: string | null;
+  traceId?: string | null;
 }
 
 export interface UsageTimeRow {
@@ -52,8 +54,8 @@ export function recordUsage(input: UsageInput): void {
     db.prepare(
       `INSERT INTO usage_records
        (usage_id, learner_id, provider, model, scenario, subject, prompt_tokens, completion_tokens,
-        total_tokens, reasoning_tokens, latency_ms, cost, success, error, key_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        total_tokens, reasoning_tokens, latency_ms, cost, success, error, key_id, trace_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       randomUUID(),
       currentLearnerId(),
@@ -70,6 +72,7 @@ export function recordUsage(input: UsageInput): void {
       input.success === false ? 0 : 1,
       input.error?.slice(0, 1000) ?? null,
       input.keyId ?? null,
+      input.traceId ?? (currentTraceId() || null),
       Date.now(),
     );
   } catch (error) {
@@ -246,7 +249,7 @@ export function usageRecords(days = 30, limit = 500, learnerId?: string) {
   return db
     .prepare(
       `SELECT usage_id, provider, model, scenario, subject, prompt_tokens, completion_tokens,
-              total_tokens, reasoning_tokens, latency_ms, cost, success, error, created_at
+              total_tokens, reasoning_tokens, latency_ms, cost, success, error, trace_id, created_at
        FROM usage_records WHERE created_at >= ?${learnerClause(learnerId)} ORDER BY created_at DESC LIMIT ?`,
     )
     .all(since(days), ...learnerParams(learnerId), limit) as unknown as Record<string, unknown>[];

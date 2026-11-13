@@ -1,3 +1,4 @@
+import './lib/same-origin-fetch.ts';
 import { access, readFile, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { addMessage, createConversation } from '../src/conversations/service.ts';

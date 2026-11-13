@@ -235,6 +235,7 @@ db.exec(`
     success INTEGER NOT NULL DEFAULT 1,
     error TEXT,
     key_id TEXT,
+    trace_id TEXT,
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_records(created_at);
@@ -333,6 +334,14 @@ db.exec(`
     enabled_tools TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS mcp_tool_confirmations (
+    server_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    side_effect INTEGER NOT NULL DEFAULT 1,
+    confirmed_at INTEGER,
+    PRIMARY KEY (server_id, tool_name)
   );
 
   CREATE TABLE IF NOT EXISTS visualizations (
@@ -457,6 +466,23 @@ function hasColumn(table: string, column: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[];
   return cols.some((c) => c.name === column);
 }
+
+if (!hasColumn('usage_records', 'trace_id')) {
+  db.exec('ALTER TABLE usage_records ADD COLUMN trace_id TEXT');
+}
+
+// C01：SSE 断线重发幂等，按账号 + 客户端请求号去重。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_idempotency (
+    learner_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    response_json TEXT,
+    conversation_id TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (learner_id, request_id)
+  );
+`);
 
 for (const table of ['documents', 'questions', 'exam_papers', 'courseware', 'media', 'visualizations', 'tasks', 'ocr_jobs']) {
   if (!hasColumn(table, 'learner_id')) {

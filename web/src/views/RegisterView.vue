@@ -134,6 +134,8 @@ async function submit(): Promise<void> {
 
     <div class="auth-links">
       <router-link to="/login">已有账号，去登录</router-link>
+      <router-link to="/privacy">隐私政策</router-link>
+      <router-link to="/terms">用户协议</router-link>
       <router-link to="/">返回首页</router-link>
     </div>
   </AuthLayout>

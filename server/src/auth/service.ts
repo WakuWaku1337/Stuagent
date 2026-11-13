@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 import { db } from '../store.ts';
+import { BOOTSTRAP_LOCAL_ONLY } from '../config.ts';
 
 export type UserRole = 'admin' | 'user';
 export type UserStatus = 'active' | 'disabled';
@@ -103,6 +104,10 @@ export function registrationOpen(): boolean {
 
 export function bootstrapAllowed(): boolean {
   return process.env.AUTH_BOOTSTRAP === '1';
+}
+
+export function bootstrapLocalOnly(): boolean {
+  return BOOTSTRAP_LOCAL_ONLY;
 }
 
 function now(): number {
@@ -468,14 +473,16 @@ export function clearLoginFailures(key: string): void {
   loginAttempts.delete(key);
 }
 
-export function registrationRateLimited(ip: string): boolean {
+export function registrationRateLimited(ip: string): { limited: boolean; retryAfterSec: number } {
   const timestamp = now();
   const windowMs = 60 * 60_000;
   const limit = Number(process.env.REGISTER_MAX_PER_HOUR ?? 10);
   const list = (registerAttempts.get(ip) ?? []).filter((value) => timestamp - value < windowMs);
   list.push(timestamp);
   registerAttempts.set(ip, list);
-  return list.length > limit;
+  if (list.length <= limit) return { limited: false, retryAfterSec: 0 };
+  const oldest = list[0] ?? timestamp;
+  return { limited: true, retryAfterSec: Math.max(1, Math.ceil((oldest + windowMs - timestamp) / 1000)) };
 }
 
 export function markLastLogin(userId: string): void {

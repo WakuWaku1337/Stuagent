@@ -1,4 +1,5 @@
 import { chatJson } from '../learning/llm.ts';
+import { ROUTE_LLM_MIN_CHARS } from '../config.ts';
 import { AGENT_IDS, type AgentId } from './roles.ts';
 
 export interface RouteDecision {
@@ -40,8 +41,7 @@ export async function routeMessage(message: string): Promise<RouteDecision> {
   }
 
   // 短问题直接交给主讲，省掉一次路由模型调用
-  const minLlmChars = Number(process.env.ROUTE_LLM_MIN_CHARS ?? 24);
-  if (message.trim().length < minLlmChars) {
+  if (message.trim().length < ROUTE_LLM_MIN_CHARS) {
     return { agent: 'tutor', reason: '短问题直接进入主讲', source: 'default' };
   }
 

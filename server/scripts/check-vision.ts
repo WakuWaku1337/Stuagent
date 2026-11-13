@@ -1,3 +1,4 @@
+import './lib/same-origin-fetch.ts';
 import { readFile } from 'node:fs/promises';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';

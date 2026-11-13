@@ -45,6 +45,7 @@ usage.get('/export', (c) => {
     'cost_usd',
     'success',
     'error',
+    'trace_id',
   ];
   const lines = rows.map((row) =>
     [
@@ -61,6 +62,7 @@ usage.get('/export', (c) => {
       row.cost,
       row.success ? '1' : '0',
       row.error ?? '',
+      row.trace_id ?? '',
     ]
       .map(csvCell)
       .join(','),

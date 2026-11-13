@@ -10,6 +10,7 @@ export interface SpeechResult {
   mode: 'browser' | 'server';
   audioUrl?: string;
   reason?: string;
+  volume?: number;
 }
 
 export async function asrStatus(): Promise<AsrStatus> {
@@ -26,19 +27,27 @@ export async function transcribeAudio(audio: Blob): Promise<string> {
   return text;
 }
 
-export async function synthesizeSpeech(text: string, rate: number): Promise<SpeechResult> {
+export async function synthesizeSpeech(
+  text: string,
+  rate: number,
+  volume = 1,
+): Promise<SpeechResult> {
   const res = await fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, rate }),
+    body: JSON.stringify({ text, rate, volume }),
   });
   const contentType = res.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
     const data = (await res.json().catch(() => null)) as
-      | { mode?: string; reason?: string; error?: string }
+      | { mode?: string; reason?: string; error?: string; message?: string; volume?: number }
       | null;
-    if (!res.ok) throw new Error(data?.error ?? `语音合成失败（${res.status}）`);
-    return { mode: data?.mode === 'server' ? 'server' : 'browser', reason: data?.reason };
+    if (!res.ok) throw new Error(data?.error ?? data?.message ?? `语音合成失败（${res.status}）`);
+    return {
+      mode: data?.mode === 'server' ? 'server' : 'browser',
+      reason: data?.reason,
+      volume: data?.volume,
+    };
   }
   if (!res.ok) throw new Error(`语音合成失败（${res.status}）`);
   const blob = await res.blob();

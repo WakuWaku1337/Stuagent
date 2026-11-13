@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { db } from '../store.ts';
+import { RagCallError, ragTimeoutSignal, withRetry } from './resilience.ts';
 
 const BATCH = 10;
 const CACHE_TTL_MS = Number(process.env.EMBEDDING_CACHE_DAYS ?? 30) * 86_400_000;
@@ -46,20 +47,36 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   for (let i = 0; i < missing.length; i += BATCH) {
     const batch = missing.slice(i, i + BATCH);
     if (batch.length === 0) continue;
-    const res = await fetch(`${baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        input: batch.map((item) => item.text),
-        dimensions: 1024,
-        encoding_format: 'float',
-      }),
+    const data = await withRetry('Embedding 请求', async () => {
+      const res = await fetch(`${baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          input: batch.map((item) => item.text),
+          dimensions: 1024,
+          encoding_format: 'float',
+        }),
+        signal: ragTimeoutSignal(),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new RagCallError(
+          'EMBEDDING_HTTP_ERROR',
+          `Embedding 失败（${res.status}）${detail ? `: ${detail.slice(0, 200)}` : ''}`,
+          res.status === 408 || res.status === 429 || res.status >= 500,
+        );
+      }
+      return (await res.json()) as { data: { index: number; embedding: number[] }[] };
     });
-    if (!res.ok) throw new Error(`Embedding 失败（${res.status}）: ${await res.text()}`);
-    const data = (await res.json()) as { data: { index: number; embedding: number[] }[] };
     const sorted = [...data.data].sort((a, b) => a.index - b.index);
-    if (sorted.length !== batch.length) throw new Error(`Embedding 返回数量不一致 ${sorted.length}/${batch.length}`);
+    if (sorted.length !== batch.length) {
+      throw new RagCallError(
+        'EMBEDDING_COUNT_MISMATCH',
+        `Embedding 返回数量不一致 ${sorted.length}/${batch.length}`,
+        false,
+      );
+    }
     sorted.forEach((item, offset) => {
       const target = batch[offset];
       vectors[target.index] = item.embedding;
