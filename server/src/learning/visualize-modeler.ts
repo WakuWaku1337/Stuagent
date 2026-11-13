@@ -1,4 +1,13 @@
 import type { VisualizationType } from './visualize.ts';
+import {
+  collectVariables,
+  parseExpression,
+  serializeExpression,
+  substituteFunctions,
+  substituteVariables,
+  type ExprNode,
+  type FunctionDefinition,
+} from '../../../shared/expression.ts';
 
 export interface ModeledVisualization {
   type: VisualizationType;
@@ -53,19 +62,17 @@ function normalizeExpression(raw: string): string {
     .replace(/\\sqrt\s*\{([^{}]+)\}/g, 'sqrt($1)')
     .replace(/\\pi/g, 'pi')
     .replace(/\\cdot|\\times/g, '*')
+    .replace(/\\le(?![a-zA-Z])/g, '<=')
+    .replace(/\\ge(?![a-zA-Z])/g, '>=')
     .replace(/[{}]/g, '')
     .replace(/\|([^|]+)\|/g, 'abs($1)')
-    .replace(/\bsqrt\s*\(([^()]*)\)/g, 'sqrt($1)')
-    .replace(/\bsqrt\s*([a-zA-Z0-9.]+)/g, 'sqrt($1)')
-    .replace(/\b(sin|cos|tan|log|ln|abs)\s+([a-zA-Z0-9.(]+)/g, '$1($2)')
+    // 只去掉函数名与括号之间的空白，不插入乘号
+    .replace(/([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g, '$1(')
+    // 数字后接字母/括号，补乘号：2x、2(x+1)
     .replace(/(\d)\s*([a-zA-Z(])/g, '$1*$2')
+    // 右括号后接字母/数字/左括号，补乘号：g(x)g(、)(、)2
     .replace(/\)\s*([a-zA-Z0-9(])/g, ')*$1')
-    .replace(/([a-zA-Z0-9)])\s*\(/g, (match, left: string, offset: number, whole: string) => {
-      const prefix = whole.slice(Math.max(0, offset - 5), offset + left.length);
-      if (FUNCTIONS.some((name) => prefix.endsWith(`${name}${left}`))) return match;
-      return `${left}*(`;
-    })
-    .replace(/[^a-zA-Z0-9+\-*/^().,]/g, '')
+    .replace(/[^a-zA-Z0-9+\-*/^().,<>=!]/g, '')
     .replace(/\s+/g, '');
   text = text.replace(/^=+/, '').replace(/=+$/, '');
   return text;
@@ -77,7 +84,7 @@ function hasVariable(expression: string): boolean {
 
 function splitExpression(raw: string): string {
   const cleaned = normalizeText(raw)
-    .split(/,|;|和|与|及|并|的图像|的图象|的顶点|的零点|的对称轴|在区间|求|画|作出|判断/)[0]
+    .split(/,|;|和|与|及|的图像|的图象|的顶点|的零点|的对称轴|在区间|求|画|作出|判断/)[0]
     .trim();
   return normalizeExpression(cleaned);
 }
@@ -111,61 +118,195 @@ function autoRange(expression: string): [number, number] {
   return [-10, 10];
 }
 
-function parametersOf(expression: string): string[] {
-  const names = [...expression.matchAll(/[a-zA-Z]+/g)].map((match) => match[0]);
-  return [...new Set(names)].filter(
-    (name) => !FUNCTIONS.includes(name) && !['x', 'y', 'pi', 'e'].includes(name),
-  );
+interface FunctionDefinitionSource {
+  name: string;
+  param: string;
+  body: string;
+  displayName?: string;
+  piecewise?: { when: string; then: string }[];
 }
 
-function substituteKnownParameters(expression: string, question: string): { expression: string; sliders: Record<string, unknown>[] } {
-  let result = expression;
+interface ParsedFunction {
+  name: string;
+  param: string;
+  expression: string;
+  piecewise?: { when: string; then: string }[];
+  label: string;
+  sliders: Record<string, unknown>[];
+}
+
+function cutFunctionBody(raw: string): string {
+  const text = raw.trim();
+  const casesStart = text.indexOf('\\begin{cases}');
+  if (casesStart >= 0) {
+    const casesEnd = text.indexOf('\\end{cases}', casesStart);
+    if (casesEnd >= 0) return text.slice(0, casesEnd + '\\end{cases}'.length).trim();
+  }
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '(' || char === '{' || char === '[') depth += 1;
+    else if (char === ')' || char === '}' || char === ']') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (char === ',' || char === ';')) return text.slice(0, index).trim();
+    else if (depth === 0 && /^的(图像|图象|顶点|零点|对称轴|交点)/.test(text.slice(index))) {
+      return text.slice(0, index).trim();
+    }
+    else if (depth === 0 && /^[与和及]/.test(text.slice(index))) {
+      return text.slice(0, index).trim();
+    }
+  }
+  return text;
+}
+
+function normalizeCondition(raw: string): string {
+  const text = normalizeText(raw)
+    .replace(/\\le(?![a-zA-Z])/g, '<=')
+    .replace(/\\ge(?![a-zA-Z])/g, '>=')
+    .replace(/\\lt(?![a-zA-Z])/g, '<')
+    .replace(/\\gt(?![a-zA-Z])/g, '>')
+    .replace(/\s+/g, '');
+  const chain = text.match(/^(.+?)(<=|<|>=|>)(.+?)(<=|<|>=|>)(.+)$/);
+  if (chain) {
+    const [, left, op1, middle, op2, right] = chain;
+    return `${left}${op1}${middle}&&${middle}${op2}${right}`;
+  }
+  return text;
+}
+
+function parseCases(raw: string): { when: string; then: string }[] {
+  const start = raw.indexOf('\\begin{cases}');
+  const end = raw.indexOf('\\end{cases}');
+  if (start < 0 || end < 0 || end <= start) throw new Error('分段函数缺少 \\begin{cases} 或 \\end{cases}');
+  let body = raw.slice(start + '\\begin{cases}'.length, end);
+  body = body.replace(/\\\\\[\s*\d+(?:\.\d+)?\s*(?:pt|ex|em|mm)\s*\]/g, '\\\\');
+  const rows = body.split(/\\\\/).map((row) => row.trim()).filter(Boolean);
+  if (rows.length === 0) throw new Error('分段函数没有分支');
+  return rows.map((row) => {
+    const cleaned = row.replace(/^\[\s*\d+(?:\.\d+)?\s*(?:pt|ex|em|mm)\s*\]/, '').trim();
+    const separator = cleaned.search(/[,&]/);
+    if (separator < 0) throw new Error('分段函数每行必须是“表达式, 条件”');
+    const thenRaw = cleaned.slice(0, separator).trim();
+    const whenRaw = cleaned.slice(separator + 1).trim().replace(/^&\s*/, '');
+    const then = normalizeExpression(thenRaw);
+    const when = normalizeCondition(whenRaw);
+    if (!then || !when) throw new Error('分段函数分支为空');
+    parseExpression(then);
+    parseExpression(when);
+    return { when, then };
+  });
+}
+
+function findFunctionDefinitions(question: string): FunctionDefinitionSource[] {
+  const text = normalizeText(question);
+  const definitions: FunctionDefinitionSource[] = [];
+  const re = /([fgh])\s*\(\s*([a-zA-Z])\s*\)\s*=/g;
+  const matches = [...text.matchAll(re)];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const bodyStart = (match.index ?? 0) + match[0].length;
+    const bodyEnd = matches[index + 1]?.index ?? text.length;
+    const body = cutFunctionBody(text.slice(bodyStart, bodyEnd));
+    if (!body) continue;
+    if (definitions.some((item) => item.name === match[1])) continue;
+    definitions.push({ name: match[1], param: match[2], body });
+  }
+  if (definitions.length === 0) {
+    const yMatches = [...text.matchAll(/(?:^|[^a-zA-Z])y\s*=\s*/g)];
+    for (let index = 0; index < yMatches.length; index += 1) {
+      const match = yMatches[index];
+      const bodyStart = (match.index ?? 0) + match[0].length;
+      const bodyEnd = yMatches[index + 1]?.index ?? text.length;
+      const body = cutFunctionBody(text.slice(bodyStart, bodyEnd));
+      if (!body) continue;
+      definitions.push({
+        name: ['f', 'g', 'h', 'k'][index] ?? `y${index}`,
+        param: 'x',
+        body,
+        displayName: 'y',
+      });
+    }
+  }
+  return definitions;
+}
+
+function pickTargetName(question: string, definitions: FunctionDefinitionSource[]): string | undefined {
+  if (definitions.length === 0) return undefined;
+  const explicit = normalizeText(question).match(/(?:画出?|作出?|绘制|研究|求)\s*(?:函数)?\s*([fgh])\s*\(/);
+  if (explicit && definitions.some((item) => item.name === explicit[1])) return explicit[1];
+  const y = definitions.find((item) => item.displayName === 'y');
+  if (y) return y.name;
+  return definitions[definitions.length - 1]?.name;
+}
+
+function applyParameters(
+  node: ExprNode,
+  question: string,
+): { node: ExprNode; sliders: Record<string, unknown>[] } {
+  const names = [...collectVariables(node)].filter((name) => !['x', 'y', 'pi', 'e'].includes(name));
+  const values: Record<string, number> = {};
   const sliders: Record<string, unknown>[] = [];
-  for (const param of parametersOf(expression)) {
+  for (const param of names) {
     const assigned = normalizeText(question).match(new RegExp(`\\b${param}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)`));
     if (assigned) {
-      result = result.replace(new RegExp(`\\b${param}\\b`, 'g'), assigned[1]);
+      values[param] = Number(assigned[1]);
       continue;
     }
-    const bounded = normalizeText(question).match(new RegExp(`\\b${param}\\s*(?:∈|属于|在)\\s*\\[\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*\\]`));
+    const bounded = normalizeText(question).match(
+      new RegExp(`\\b${param}\\s*(?:∈|属于|在)\\s*\\[\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*\\]`),
+    );
     const min = bounded ? Number(bounded[1]) : 0.5;
     const max = bounded ? Number(bounded[2]) : 3;
     sliders.push({ param, min, max, step: 0.1, value: round((min + max) / 2, 2) });
   }
-  return { expression: result, sliders };
+  return { node: substituteVariables(node, values), sliders };
 }
 
-// ---------------------------------------------------------------------------
-// 函数与圆锥曲线
-// ---------------------------------------------------------------------------
-
-interface ParsedFunction {
-  expression: string;
-  label: string;
-}
-
-function extractFunctions(question: string): ParsedFunction[] {
-  const text = normalizeText(question);
-  const found: ParsedFunction[] = [];
-  const re = /(?:^|[^a-zA-Z])(y|f\s*\(\s*x\s*\)|g\s*\(\s*x\s*\)|h\s*\(\s*x\s*\))\s*=\s*(.+?)(?=\s*(?:和|与|及|、|,|;|的图像|的图象|的顶点|的零点|的对称轴|并|且|$))/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text))) {
-    const expression = splitExpression(match[2]);
-    if (!hasVariable(expression)) continue;
-    if (/x\^2.*y\^2|y\^2.*x\^2|sqrt\(x\)|sqrt\(y\)/.test(expression)) continue;
-    const name = match[1].replace(/\s+/g, '').toLowerCase();
-    found.push({ expression, label: name === 'y' ? `y=${expression}` : `${name}=${expression}` });
+function buildFunctionItem(
+  definition: FunctionDefinitionSource,
+  definitions: Map<string, FunctionDefinition>,
+  piecewiseNames: Set<string>,
+  question: string,
+): ParsedFunction {
+  if (definition.body.includes('\\begin{cases}')) {
+    const branches = parseCases(definition.body);
+    const sliders: Record<string, unknown>[] = [];
+    const applied = branches.map((branch) => {
+      const whenApplied = applyParameters(parseExpression(branch.when), question);
+      const thenApplied = applyParameters(parseExpression(branch.then), question);
+      sliders.push(...whenApplied.sliders, ...thenApplied.sliders);
+      return {
+        when: serializeExpression(whenApplied.node),
+        then: serializeExpression(thenApplied.node),
+      };
+    });
+    return {
+      name: definition.name,
+      param: definition.param,
+      expression: '',
+      piecewise: applied,
+      label: `${definition.displayName ?? definition.name}(${definition.param})=分段函数`,
+      sliders,
+    };
   }
-  if (found.length > 0) return found.slice(0, 4);
 
-  const lone = text.match(/(?:画出?|作出?|绘制|研究)\s*(?:函数)?\s*([^;]+?)\s*(?:的图像|的图象|图像|图象|$)/);
-  if (lone) {
-    const expression = splitExpression(lone[1]);
-    if (hasVariable(expression) && !/x\^2.*y\^2|y\^2.*x\^2/.test(expression)) {
-      return [{ expression, label: `y=${expression}` }];
+  const normalized = normalizeExpression(definition.body);
+  if (!normalized) throw new Error('函数表达式为空');
+  let ast = parseExpression(normalized);
+  for (const name of piecewiseNames) {
+    if (new RegExp(`\\b${name}\\s*\\(`).test(normalized)) {
+      throw new Error(`暂不支持分段函数参与复合：${name}`);
     }
   }
-  return [];
+  ast = substituteFunctions(ast, definitions);
+  const applied = applyParameters(ast, question);
+  const expression = serializeExpression(applied.node);
+  return {
+    name: definition.name,
+    param: definition.param,
+    expression,
+    label: (definition.displayName ?? definition.name) === 'y' ? `y=${expression.replace(/\*/g, '')}` : `${definition.displayName ?? definition.name}(${definition.param})=${expression.replace(/\*/g, '')}`,
+    sliders: applied.sliders,
+  };
 }
 
 function extractInequality(question: string): { left: string; operator: string; right: string } | null {
@@ -179,48 +320,57 @@ function extractInequality(question: string): { left: string; operator: string; 
 }
 
 function modelFunction(question: string, subject?: string): ModeledVisualization | null {
-  const parsed = extractFunctions(question);
-  const inequality = extractInequality(question);
-  if (parsed.length === 0 && !inequality) return null;
-  const primary = parsed.length > 0 ? parsed : [{ expression: inequality!.left, label: `f(x)=${inequality!.left}` }];
-  const range = extractInterval(question) ?? autoRange(primary[0].expression);
-  const functions = primary.map((item, index) => {
-    const substituted = substituteKnownParameters(item.expression, question);
-    const pretty = substituted.expression.replace(/\*/g, '');
-    const label =
-      primary.length > 1
-        ? `${['f', 'g', 'h', 'k'][index] ?? 'f'}(x)=${pretty}`
-        : item.label.startsWith('y=')
-          ? `y=${pretty}`
-          : `f(x)=${pretty}`;
-    return {
-      expression: substituted.expression,
-      label,
-      color: ['#409eff', '#f56c6c', '#67c23a', '#e6a23c'][index % 4],
-      sliders: substituted.sliders,
-    };
-  });
-  const sliders = functions.flatMap((item) => item.sliders);
-  const relations: Record<string, unknown>[] = [];
-  if (parsed.length >= 2 && /交点|相交|交于/.test(question)) {
-    relations.push({
-      kind: 'intersection',
-      solve: `${functions[0].expression}=${functions[1].expression}`,
+  const definitions = findFunctionDefinitions(question);
+  const inequality = /\\begin\{cases\}/.test(question) ? null : extractInequality(question);
+  if (definitions.length === 0 && !inequality) return null;
+
+  const targetName = pickTargetName(question, definitions);
+  const ordered = definitions
+    .slice()
+    .sort((a, b) => (a.name === targetName ? -1 : b.name === targetName ? 1 : 0));
+  const synthetic: FunctionDefinitionSource[] = ordered.length
+    ? ordered
+    : [{ name: 'f', param: 'x', body: inequality!.left }];
+
+  const piecewiseNames = new Set(
+    synthetic.filter((item) => item.body.includes('\\begin{cases}')).map((item) => item.name),
+  );
+  const functionTable = new Map<string, FunctionDefinition>();
+  for (const definition of synthetic) {
+    if (definition.body.includes('\\begin{cases}')) continue;
+    const normalized = normalizeExpression(definition.body);
+    if (!normalized) continue;
+    functionTable.set(definition.name, {
+      name: definition.name,
+      params: [definition.param],
+      body: parseExpression(normalized),
     });
+  }
+
+  const functions = synthetic.map((definition) =>
+    buildFunctionItem(definition, functionTable, piecewiseNames, question),
+  );
+  const primary = functions[0];
+  const range = extractInterval(question) ?? (primary.piecewise ? ([-8, 8] as [number, number]) : autoRange(primary.expression));
+  const relations: Record<string, unknown>[] = [];
+  if (functions.length >= 2 && functions[0].expression && functions[1].expression && /交点|相交|交于/.test(question)) {
+    relations.push({ kind: 'intersection', solve: `${functions[0].expression}=${functions[1].expression}` });
   }
   const regions: Record<string, unknown>[] = [];
   if (inequality) {
     regions.push({ where: `${inequality.left}${inequality.operator}${inequality.right}`, fill: 'rgba(64,158,255,0.18)' });
   }
-  const titleParts = functions.map((item) => item.label).join('，');
+  const sliders = functions.flatMap((item) => item.sliders);
+  const uniqueSliders = [...new Map(sliders.map((item) => [item.param, item])).values()];
   const spec: Record<string, unknown> = {
     functions: functions.map(({ sliders: _sliders, ...item }) => item),
     range,
     relations,
     regions,
-    sliders,
+    sliders: uniqueSliders,
   };
-  if (functions.length === 1) spec.expression = functions[0].expression;
+  if (functions.length === 1 && primary.expression) spec.expression = primary.expression;
+  const titleParts = functions.map((item) => item.label).join('，');
   void subject;
   return {
     type: 'function2d',
@@ -229,7 +379,6 @@ function modelFunction(question: string, subject?: string): ModeledVisualization
     basis: `解析到 ${functions.length} 个函数表达式${inequality ? '与不等式' : ''}`,
   };
 }
-
 function modelConic(question: string): ModeledVisualization | null {
   const text = normalizeText(question);
   if (!/椭圆|双曲线|抛物线|圆锥曲线/.test(text)) return null;

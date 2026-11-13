@@ -1,10 +1,18 @@
 # 智学 实施进度
 
-当前阶段：文档—代码一致性整改（2026-11-13）已完成 B1 安全修复、B2 契约修复与 B3 文档对齐；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
+当前阶段：文档—代码一致性整改（2026-11-13）已完成 B1 安全修复、B2 契约修复与 B3 文档对齐；公式渲染与函数可视化修复已完成（共享表达式内核、函数复合、cases 分段、Math 保护层）；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
 
 公开注册：S33 数据隔离完成后已恢复默认开放（`REGISTRATION_OPEN=1`）；如需收紧设置 `REGISTRATION_OPEN=0`
 
 密码策略：注册、改密、管理员重置统一放宽为 6–128 位；README 已按 v0.30 重写（2026-11-08）
+
+## 2026-11-13 · 公式渲染与函数可视化修复
+
+- 公式渲染：新增 `web/src/utils/math.ts`，Markdown 先保护数学段再交给 marked，`\\`、`\[...\]` 不再被 Markdown 转义；`\\[2pt]` 归一化为 `\\`。
+- 表达式内核：新增 `shared/expression.ts`，服务端建模与前端绘制共用 AST 编译器；修复 `abs*(x)`/`sin*(x)`，支持函数定义、复合与 `\begin{cases}` 分段。
+- 前端：`FunctionChart.vue` 改用编译后的闭包，表达式失败时显示红色错误提示，不再只留空白坐标轴。
+- 校验：`createVisualization` 对不可编译表达式返回 `VIZ_EXPRESSION_UNSUPPORTED`；新增 `check-markdown-math.ts`，扩展 `check-visualize.ts`。
+- 验证：`check-visualize.ts`、`check-markdown-math.ts` ALL PASS；`npm run build` 通过；服务端类型检查仍为既有 6 项错误。
 
 ## 2026-11-13 · 文档—代码一致性整改（依据《施工方案-文档代码一致性整改.md》v0.1）
 

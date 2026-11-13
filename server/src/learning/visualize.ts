@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../store.ts';
 import { deleteLegacyCourseware, getLegacyCourseware, listLegacyCourseware } from '../courseware/legacy.ts';
 import { currentLearnerId } from './context.ts';
+import { compileExpression } from '../../../shared/expression.ts';
 
 export const VISUALIZATION_TYPES = [
   'geometry3d',
@@ -66,6 +67,32 @@ function validateExpression(value: unknown): string {
   return expression;
 }
 
+function validateCompilable(expression: string, code: string, params: Record<string, number> = {}): void {
+  try {
+    const fn = compileExpression(expression);
+    let valid = 0;
+    for (const x of [-5, -1, 0, 1, 5]) {
+      if (Number.isFinite(fn(x, { y: 0, ...params }))) valid += 1;
+    }
+    if (valid === 0) throw new Error('在采样点均不可计算');
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new VisualizationError(code, `表达式无法绘制：${expression}（${reason}）`);
+  }
+}
+
+function validatePiecewise(value: unknown, params: Record<string, number> = {}): void {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) {
+    throw new VisualizationError('VIZ_PIECEWISE_INVALID', 'piecewise 必须是 1~10 个分支');
+  }
+  for (const item of value) {
+    if (!isRecord(item)) throw new VisualizationError('VIZ_PIECEWISE_INVALID', 'piecewise 每项必须是对象');
+    const when = validateExpression(item.when);
+    const then = validateExpression(item.then);
+    validateCompilable(when, 'VIZ_PIECEWISE_INVALID', params);
+    validateCompilable(then, 'VIZ_PIECEWISE_INVALID', params);
+  }
+}
 function validateRange(spec: Record<string, unknown>) {
   const range = spec.range;
   if (!Array.isArray(range) || range.length !== 2 || !finiteNumber(range[0]) || !finiteNumber(range[1]) || range[0] >= range[1]) {
@@ -91,6 +118,14 @@ function optionalFinite(spec: Record<string, unknown>, key: string, code: string
 }
 
 function validateFunctionSpec(spec: Record<string, unknown>, needRange = true) {
+  const sliderValues: Record<string, number> = {};
+  if (Array.isArray(spec.sliders)) {
+    for (const item of spec.sliders) {
+      if (isRecord(item) && typeof item.param === 'string' && finiteNumber(item.min) && finiteNumber(item.max)) {
+        sliderValues[item.param] = finiteNumber(item.value) ? item.value : (item.min + item.max) / 2;
+      }
+    }
+  }
   const functions = spec.functions;
   if (functions !== undefined) {
     if (!Array.isArray(functions) || functions.length < 1 || functions.length > 6) {
@@ -98,12 +133,18 @@ function validateFunctionSpec(spec: Record<string, unknown>, needRange = true) {
     }
     for (const item of functions) {
       if (!isRecord(item)) throw new VisualizationError('VIZ_FUNCTIONS_INVALID', 'functions 每项必须是对象');
-      validateExpression(item.expression);
+      if (item.piecewise !== undefined) {
+        validatePiecewise(item.piecewise, sliderValues);
+      } else {
+        const expression = validateExpression(item.expression);
+        validateCompilable(expression, 'VIZ_EXPRESSION_UNSUPPORTED', sliderValues);
+      }
       optionalString(item, 'color', 'VIZ_COLOR_INVALID', 40);
       optionalString(item, 'label', 'VIZ_LABEL_INVALID', 60);
     }
   } else {
-    validateExpression(spec.expression);
+    const expression = validateExpression(spec.expression);
+    validateCompilable(expression, 'VIZ_EXPRESSION_UNSUPPORTED', sliderValues);
   }
   if (needRange) validateRange(spec);
   optionalString(spec, 'variable', 'VIZ_VARIABLE_INVALID', 20);

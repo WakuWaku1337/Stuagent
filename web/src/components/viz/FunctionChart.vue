@@ -15,6 +15,7 @@ interface FnItem {
   expression: string;
   color: string;
   label: string;
+  piecewise?: { when: string; then: string }[];
 }
 
 const DEFAULT_COLORS = ['#409eff', '#f56c6c', '#67c23a', '#e6a23c', '#b07ce8', '#5b8ff9'];
@@ -25,14 +26,38 @@ function functionItems(): FnItem[] {
   if (raw.length) {
     return raw.map((item, index) => {
       const fn = (item ?? {}) as Record<string, unknown>;
+      const piecewise = Array.isArray(fn.piecewise)
+        ? fn.piecewise
+            .map((branch) => (branch ?? {}) as Record<string, unknown>)
+            .map((branch) => ({ when: String(branch.when ?? ''), then: String(branch.then ?? '') }))
+            .filter((branch) => branch.when && branch.then)
+        : undefined;
       return {
         expression: String(fn.expression ?? ''),
         color: typeof fn.color === 'string' ? fn.color : DEFAULT_COLORS[index % DEFAULT_COLORS.length],
         label: typeof fn.label === 'string' ? fn.label : String(fn.expression ?? ''),
+        piecewise: piecewise?.length ? piecewise : undefined,
       };
     });
   }
   return [{ expression: String(spec.expression ?? ''), color: DEFAULT_COLORS[0], label: String(spec.expression ?? '') }];
+}
+
+function compileItem(item: FnItem): (x: number) => number {
+  if (item.piecewise?.length) {
+    const branches = item.piecewise.map((branch) => ({
+      when: compileExpression(branch.when),
+      then: compileExpression(branch.then),
+    }));
+    return (x: number) => {
+      for (const branch of branches) {
+        if (branch.when(x, params) !== 0) return branch.then(x, params);
+      }
+      return Number.NaN;
+    };
+  }
+  const fn = compileExpression(item.expression);
+  return (x: number) => fn(x, params);
 }
 
 function rangeOf(): [number, number] {
@@ -105,8 +130,8 @@ function regionDatum(where: string, fill: string, range: [number, number], scope
   const right = compileExpression(resolveSide(match[3], items));
   const operator = match[2];
   const holds = (x: number) => {
-    const a = left(x);
-    const b = right(x);
+    const a = left(x, scope);
+    const b = right(x, scope);
     if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
     if (operator === '<') return a < b;
     if (operator === '<=') return a <= b;
@@ -129,8 +154,8 @@ function regionDatum(where: string, fill: string, range: [number, number], scope
   const boundary: [number, number][] = [];
   for (const [a, b] of intervals) {
     if (b - a < 1) continue;
-    for (let index = a; index <= b; index += 1) boundary.push([xs[index], left(xs[index])]);
-    for (let index = b; index >= a; index -= 1) boundary.push([xs[index], right(xs[index])]);
+    for (let index = a; index <= b; index += 1) boundary.push([xs[index], left(xs[index], scope)]);
+    for (let index = b; index >= a; index -= 1) boundary.push([xs[index], right(xs[index], scope)]);
   }
   if (boundary.length < 4) return null;
   const at = (t: number): [number, number] => {
@@ -170,12 +195,44 @@ function buildData() {
     if (datum) data.push(datum);
   }
 
+  const implicitMode = props.visualization.type === 'conic' || spec.implicit === true;
+  const compiled = new Map<number, (x: number) => number>();
+  const errors: string[] = [];
   items.forEach((item, index) => {
     if (hidden[index]) return;
-    if (props.visualization.type === 'conic' || spec.implicit === true) {
-      data.push({ fn: item.expression, fnType: 'implicit', color: item.color, scope });
+    try {
+      const fn = compileItem(item);
+      const samples = [range[0], (range[0] + range[1]) / 2, range[1]]
+        .map((x) => fn(x))
+        .filter((value) => !Number.isNaN(value));
+      if (samples.length === 0 || samples.some((value) => !Number.isFinite(value))) {
+        throw new Error('在绘图区间内不可计算');
+      }
+      compiled.set(index, fn);
+    } catch (error) {
+      errors.push(`${item.label}：${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  if (!implicitMode && items.some((_item, index) => !hidden[index]) && compiled.size === 0) {
+    renderError.value = errors.join('；') || '没有可绘制的函数';
+    return [];
+  }
+  renderError.value = errors.join('；');
+
+  items.forEach((item, index) => {
+    if (hidden[index]) return;
+    const fn = compiled.get(index);
+    if (!fn) return;
+    if (implicitMode) {
+      const evaluator = compileExpression(item.expression);
+      data.push({
+        fn: (scope: { x: number; y?: number }) => evaluator(scope.x, { ...params, y: scope.y ?? 0 }),
+        fnType: 'implicit',
+        color: item.color,
+        attr: { 'stroke-width': 2 },
+      });
     } else {
-      data.push({ fn: item.expression, color: item.color, scope, attr: { 'stroke-width': 2 } });
+      data.push({ fn: (scope: { x: number }) => fn(scope.x), color: item.color, attr: { 'stroke-width': 2 } });
     }
   });
 
@@ -190,16 +247,19 @@ function buildData() {
       const rightExpr = resolveSide(sides[1], items);
       const left = compileExpression(leftExpr);
       const right = compileExpression(rightExpr);
-      for (const x of scanRoots((value) => left(value) - right(value), range)) markers.push([x, left(x)]);
+      for (const x of scanRoots((value) => left(value, scope) - right(value, scope), range)) {
+        markers.push([x, left(x, scope)]);
+      }
     } catch {
       // 关系式不是关于 x 的表达式（如未解析出函数名）时跳过标记，不影响曲线
     }
   }
   items.forEach((item, index) => {
-    if (hidden[index] || props.visualization.type === 'conic') return;
+    if (hidden[index] || implicitMode) return;
+    const fn = compiled.get(index);
+    if (!fn) return;
     try {
-      const fn = compileExpression(item.expression);
-      for (const x of scanRoots(fn, range)) markers.push([x, 0]);
+      for (const x of scanRoots((value) => fn(value), range)) markers.push([x, 0]);
     } catch {
       // 该函数不可数值求值时跳过零点标记
     }
@@ -215,13 +275,15 @@ function render(resetDomain = false) {
   renderError.value = '';
   try {
     const range = rangeOf();
+    const data = buildData();
+    if (data.length === 0 && renderError.value) return;
     functionPlot({
       target: host.value,
       width: host.value.clientWidth || 720,
       height: 420,
       grid: true,
       disableZoom: false,
-      data: buildData() as never,
+      data: data as never,
       ...(resetDomain ? { xDomain: range } : {}),
     });
   } catch (error) {
