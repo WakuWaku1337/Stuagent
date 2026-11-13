@@ -14,7 +14,7 @@ const read = (relative: string): string => readFileSync(resolve(root, relative),
 const readme = read('README.md');
 const design = read('智学Agent项目设计文档.md');
 const progress = read('PROGRESS.md');
-const builder = read('施工文档-EduPi代码整改.md');
+
 const rolesSource = read('server/src/agents/roles.ts');
 const docs = { 'README.md': readme, '智学Agent项目设计文档.md': design, 'PROGRESS.md': progress };
 
@@ -47,7 +47,7 @@ report(
 report(/断线重连[^\n]*未实现/.test(design) && /MCP 断线重连/.test(readme), 'MCP 重连 is marked unimplemented in design/README');
 
 // 3. RAG_CANDIDATE_K 默认值 30
-for (const [name, text] of [['README.md', readme], ['设计文档', design], ['施工文档', builder]] as const) {
+for (const [name, text] of [['README.md', readme], ['设计文档', design]] as const) {
   const line = text.split(/\r?\n/).find((item) => item.includes('RAG_CANDIDATE_K'));
   report(Boolean(line?.includes('30')), `${name} documents RAG_CANDIDATE_K=30`, line?.trim().slice(0, 80) ?? 'missing');
 }

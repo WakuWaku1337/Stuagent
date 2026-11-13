@@ -4,13 +4,14 @@
 
 | 项目   | 内容                         |
 | ---- | -------------------------- |
-| 文档版本 | v0.31（实现对齐版） |
+| 文档版本 | v0.32（实现对齐版） |
 | 编写日期 | 2026-11-06                 |
-| 修订日期 | 2026-11-12（v0.31）          |
+| 修订日期 | 2026-11-13（v0.32）          |
 | 项目代号 | EduPi（中文名 "智学"，可改名）        |
 | 基础框架 | Pi Coding Agent（pi.dev）    |
 | 文档状态 | 已按实现对齐                        |
 
+> v0.32 变更：新增 §5.10 多用户运行护栏；同步会话固定 key、会话互斥、全局/单用户并发门限、Session LRU/TTL、运行时表清理、SQLite `busy_timeout`、容器 healthcheck/日志轮转与生产部署口径；更新 §6.9、§6.12、§6.16、§9.4、§11、§12 与附录 B。
 > v0.31 变更：以当前代码为事实基线，同步技术选型、扩展机制、数据模型、配置项、接口与验收口径；规划态但尚未实现的条目统一标注「未实现」。详见附录 B。
 > v0.30 变更：账号方案收敛为“简单账号密码”——注册只填用户名、密码、手机号、邮箱（可选，不验证）；移除邮箱验证码、邮件找回、CAPTCHA、管理员 2FA、邀请码、按账号配额；保留服务端会话、数据隔离、管理员重置密码与上线最低要求。S32–S34 精简，取消 S35。
 > v0.29（历史）：按公网个人网站标准扩展过邮箱验证、邮件 DNS、CAPTCHA、2FA、配额与完整上线清单；因当前只需要简单登录，已在 v0.30 收回。
@@ -277,6 +278,8 @@ flowchart TD
     J --> K["结果持久化到 SQLite/文件"]
     K --> L["输出给学生"]
 ```
+
+> 实现补充（v0.32）：上述流程图描述模型内部路径；HTTP 入口在进入模型前还会经过 CSRF/认证 → 会话锁（同会话并发返回 409）→ 用户/全局并发门限（超限返回 429）→ 固定 provider key → Session LRU/TTL。详见 §5.10。
 
 ### 5.3 子智能体协作图
 
@@ -818,6 +821,34 @@ flowchart TD
 * 管理员默认不能读取他人的对话、资料、错题与复盘内容，只可管理账号状态、邀请与聚合用量。
 * SSE `/api/chat`、文件下载、WebSocket `/ws` 必须与 REST 走同一套会话校验，事件只推送给任务所属账号。
 
+### 5.10 多用户运行护栏（v0.32）
+
+单实例部署下，多个用户共享同一个 Node 进程、SQLite 文件与 provider 额度。为防止“一个用户拖垮所有人”，在进入 Agent 前增加四层护栏：
+
+```mermaid
+flowchart LR
+    Req["/api/chat"] --> Auth["CSRF + requireAuth"]
+    Auth --> CLock{"会话锁"}
+    CLock -->|忙| R409["409 CONVERSATION_BUSY"]
+    CLock -->|空闲| Gate{"用户/全局并发门限"}
+    Gate -->|超限| R429["429 CHAT_BUSY"]
+    Gate --> Pin["固定 provider key"]
+    Pin --> Cache["Session LRU / TTL"]
+    Cache --> Pi["Pi Agent Loop"]
+    Pi --> DB[("SQLite + 历史回放")]
+```
+
+关键约束：
+
+* **单实例**：默认一个 Node 进程 + 一个 SQLite 文件；不要让多个应用容器共享同一个 `app_data` 卷。SQLite 已启用 WAL 与 `busy_timeout=5000`，但不支持多写实例。
+* **会话固定 key**：同一 `agent + conversation` 正常路径固定一个 provider key；只有调用失败才切换，切换时只丢弃该角色在该会话下的旧 session，并从数据库历史重建，避免上下文跳变。
+* **会话互斥**：同一会话同时只允许一个生成任务；第二个请求返回 `409 CONVERSATION_BUSY`，且在写入用户消息前拒绝。
+* **并发门限**：`AGENT_MAX_CONCURRENT`（默认 6）与 `AGENT_MAX_CONCURRENT_PER_USER`（默认 2）；全局满时最多排队 `AGENT_QUEUE_WAIT_MS`（默认 15s），超时返回 `429 CHAT_BUSY`。
+* **缓存上限**：Pi `AgentSession` 使用 LRU + 空闲 TTL（默认 300 条 / 60 分钟），避免长期运行内存无界增长。
+* **周期清理**：每 `MAINTENANCE_INTERVAL_HOURS`（默认 6h）清理过期 `chat_idempotency`、`answer_cache` 与已结束 `tasks`。
+* **容器运维护栏**：`docker-compose.cloud.yml` 带 `/health` healthcheck 与 json-file 日志轮转；Nginx 上传上限 210m，与应用 200MB 单批限制对齐。
+* **生产默认**：公网多用户设 `REGISTRATION_OPEN=0`，由管理员建号；`.env` 权限 600，`EDUPI_SETTINGS_SECRET` 必须异地备份。
+
 
 
 ***
@@ -881,6 +912,8 @@ flowchart TD
 * `turn_end` → `chat/handler.ts` done 落库 + 工具主动写回。
 
 * `session_before_compact` → `server/src/config.ts` 历史回放 16 条 / 单条 6000 字。
+
+> v0.32 补充：会话互斥与缓存生命周期不是 Pi hook，而由 `server/src/chat/lock.ts`（同会话互斥）与 `server/src/chat/session-cache.ts`（LRU/TTL）在 `pi.ts` 外层管理；删除会话时同步清理该会话全部角色 session 与 key 绑定。
 
 ### 6.5 后端 API 接口（REST）
 
@@ -1216,7 +1249,7 @@ flowchart TD
 
 * 各 provider 的 key 独立保存，本地 AES 加密（密钥结合本机信息派生）。
 
-* 同一 Provider 可配置多把 key；主对话与学习模块都按 `LLM_KEY_MAX_ATTEMPTS`（默认 3，范围 1–20）限制单次请求最多尝试的 key 数，失败 key 进入冷却。
+* 同一 Provider 可配置多把 key；主对话与学习模块都按 `LLM_KEY_MAX_ATTEMPTS`（默认 3，范围 1–20）限制单次请求最多尝试的 key 数，失败 key 进入冷却。主对话同一会话正常路径固定一个 key（`server/src/chat/key-selection.ts`），只有失败才切换；切换时丢弃该角色在该会话下的旧 session，并用数据库历史重建，避免多 key 轮换造成上下文跳变。
 
 * 前端密码框掩码输入、可切换显隐，回显仅显示掩码；支持更新与删除。
 
@@ -1279,6 +1312,10 @@ flowchart TD
 * 同一 provider 支持配置多个 key，按轮询 / 随机负载分担。
 
 * 出现 429 限流、401 失效、5xx、超时等自动切换下一个 key 或备用模型。
+
+* 主对话按“会话固定 key”优先：同一 `agent + conversation` 成功后把 key 写入内存绑定；后续请求优先复用该 key，只有该 key 冷却或调用失败才切换。
+
+* 切换 key 时删除该角色在该会话下的旧 AgentSession，并从 SQLite 历史完整回放，保证新 key 看到的上下文与旧 key 一致。
 
 * 连续失败的 key 进入冷却熔断，健康检查通过后恢复；记录每次失败与切换原因。
 
@@ -1422,6 +1459,12 @@ flowchart TD
 * 历史会话列表支持按时间分组、搜索、重命名、置顶、删除；标题取首条消息截断，不做自动摘要。
 
 * 重新打开即加载历史消息，可在原上下文继续对话；消息分页加载，前端缓存最近会话。
+
+* 同一会话同时只允许一个生成任务（`server/src/chat/lock.ts`）；并发请求返回 `409 CONVERSATION_BUSY`，且不会写入第二条用户消息。
+
+* Pi `AgentSession` 使用 LRU + 空闲 TTL（`AGENT_SESSION_MAX=300`、`AGENT_SESSION_TTL_MIN=60`），不再无限增长；删除会话时同步清理其全部角色 session 与 key 绑定。
+
+* 同一会话正常路径固定一个 provider key；只有失败才切换，并用数据库历史重建 session（见 §6.9.7）。
 
 
 
@@ -1903,7 +1946,7 @@ flowchart TD
 | --- | --- | --- |
 | AUTH_ENABLED | 1 | 关闭仅用于隔离测试，生产禁止 |
 | AUTH_BOOTSTRAP | 0 | 允许本机首次注册成为管理员 |
-| REGISTRATION_OPEN | 1 | 默认开放公开注册；设为 0 关闭，关闭后仅管理员建号 |
+| REGISTRATION_OPEN | 1 | 开发默认开放；生产多用户建议 0，关闭后仅管理员建号 |
 | SESSION_TTL_DAYS | 7 | 空闲有效期 |
 | SESSION_ABSOLUTE_DAYS | 30 | 绝对有效期 |
 | SESSION_MAX_PER_USER | 10 | 单账号最大会话数 |
@@ -1912,12 +1955,20 @@ flowchart TD
 | LOGIN_WINDOW_MIN | 15 | 失败计数窗口 |
 | LOGIN_LOCK_MIN | 15 | 锁定时长 |
 | TRUST_PROXY | 1 | 信任反向代理的转发头，仅在有可信代理时开启 |
+| AGENT_SESSION_MAX | 300 | Pi AgentSession 缓存条数上限，0=不限制 |
+| AGENT_SESSION_TTL_MIN | 60 | AgentSession 空闲过期分钟数，0=不过期 |
+| AGENT_MAX_CONCURRENT | 6 | 聊天全局并发上限，0=不限制 |
+| AGENT_MAX_CONCURRENT_PER_USER | 2 | 单用户聊天并发上限，0=不限制 |
+| AGENT_QUEUE_WAIT_MS | 15000 | 全局并发满时最长排队时间，0=不排队 |
+| MAINTENANCE_INTERVAL_HOURS | 6 | 运行时表清理周期，0=关闭 |
+| IDEMPOTENCY_RETENTION_HOURS | 24 | chat_idempotency 保留小时数 |
+| TASK_RETENTION_DAYS | 30 | 已结束 tasks 保留天数 |
 
-#### 实现新增配置项（v0.31）
+#### 实现新增配置项（v0.31–v0.32）
 
-实现中新增（相对 v0.30 规划态）的配置项：`CSRF_ENABLED`、`CSRF_ALLOWED_ORIGINS`、`BOOTSTRAP_LOCAL_ONLY`、`MCP_CONFIRM_SIDE_EFFECTS`、`DOCUMENT_PII_REDACT`、`TRACE_LOG`、`AGENT_MAX_TOOL_STEPS`、`AGENT_WALL_CLOCK_MS`、`AGENT_TOKEN_BUDGET`、`RAG_TIMEOUT_MS`、`MILVUS_TIMEOUT_MS`、`RAG_RETRY_MAX`、`TASK_TIMEOUT_MS`、`TASK_RETRY_MAX`、`LLM_KEY_MAX_ATTEMPTS`、`FAST_MODEL_ID`、`SSE_RETRY_MAX` / `VITE_SSE_RETRY_MAX`、`TTS_DEFAULT_VOLUME`、`EVAL_ENABLE_ADVANCED`、`CHAT_HISTORY_LIMIT`、`HISTORY_ITEM_MAX_CHARS`、`RAG_TOP_K` / `RAG_CANDIDATE_K` / `RAG_RECALL_LIMIT`、`RERANK_MIN_QUERY_CHARS`、`ROUTE_LLM_MIN_CHARS`。
+实现中新增（相对 v0.30 规划态）的配置项：`CSRF_ENABLED`、`CSRF_ALLOWED_ORIGINS`、`BOOTSTRAP_LOCAL_ONLY`、`MCP_CONFIRM_SIDE_EFFECTS`、`DOCUMENT_PII_REDACT`、`TRACE_LOG`、`AGENT_MAX_TOOL_STEPS`、`AGENT_WALL_CLOCK_MS`、`AGENT_TOKEN_BUDGET`、`RAG_TIMEOUT_MS`、`MILVUS_TIMEOUT_MS`、`RAG_RETRY_MAX`、`TASK_TIMEOUT_MS`、`TASK_RETRY_MAX`、`LLM_KEY_MAX_ATTEMPTS`、`AGENT_SESSION_MAX`、`AGENT_SESSION_TTL_MIN`、`AGENT_MAX_CONCURRENT`、`AGENT_MAX_CONCURRENT_PER_USER`、`AGENT_QUEUE_WAIT_MS`、`MAINTENANCE_INTERVAL_HOURS`、`IDEMPOTENCY_RETENTION_HOURS`、`TASK_RETENTION_DAYS`、`FAST_MODEL_ID`、`SSE_RETRY_MAX` / `VITE_SSE_RETRY_MAX`、`TTS_DEFAULT_VOLUME`、`EVAL_ENABLE_ADVANCED`、`CHAT_HISTORY_LIMIT`、`HISTORY_ITEM_MAX_CHARS`、`RAG_TOP_K` / `RAG_CANDIDATE_K` / `RAG_RECALL_LIMIT`、`RERANK_MIN_QUERY_CHARS`、`ROUTE_LLM_MIN_CHARS`。
 
-默认值以 `server/src/config.ts`、`server/src/tasks/queue.ts`、`server/tsconfig.json` 为准；完整表见 `施工文档-EduPi代码整改.md` §3 与 `README.md` 配置节。
+默认值以 `server/src/config.ts`、`server/src/tasks/queue.ts`、`server/tsconfig.json` 为准；完整表见 `README.md` 配置节与本节表格。
 
 #### 6.16.10 验收标准
 
@@ -1931,12 +1982,22 @@ flowchart TD
 8. 认证开启后原有回归脚本与前端页面全部通过；SSE 对话、文件上传、OCR 校对、后台任务、WebSocket 推送均带登录态正常工作。
 9. 公网部署通过 HTTPS、Secure Cookie 与每日备份检查；关闭注册时新用户无法注册。
 
+10. 同一会话并发发送两条消息时，第二条返回 `409 CONVERSATION_BUSY`，且数据库只保留第一条用户消息；可通过 `check-conversation-lock.ts` 验证。
+
+11. 单用户超过并发上限返回 `429 CHAT_BUSY`；全局并发满时按 `AGENT_QUEUE_WAIT_MS` 排队，超时返回 429；可通过 `check-chat-gate.ts` 验证。
+
+12. 配置两个及以上 provider key 时，同一会话连续三轮固定同一 key；只有调用失败才切换，并通过数据库历史重建 session；可通过 `check-session-pinning.ts` 验证。
+
+13. Session LRU/TTL、幂等表/答案缓存/已结束任务清理可通过 `check-multiuser.ts` 验证；SQLite `busy_timeout=5000` 生效。
+
 ### 6.17 上线最低要求
 
 本期账号以“简单可用”为目标，不引入邮件验证、CAPTCHA、2FA 和按账号配额。做到以下几条即可上线；后续需要再逐项加。
 
 * 绑定域名并使用 HTTPS（Caddy 自动证书或 Nginx + Let's Encrypt），只开放 80/443，应用端口不直接暴露。
-* 反向代理与应用双层限流；注册默认开放，可通过 `REGISTRATION_OPEN=0` 关闭。
+* 反向代理与应用双层限流；开发默认开放注册，生产多用户建议设 `REGISTRATION_OPEN=0`，由管理员建号。
+* 多用户运行护栏：只跑一个应用容器，不要让多个容器共享同一个 SQLite 卷；配置 `AGENT_MAX_CONCURRENT` / `AGENT_MAX_CONCURRENT_PER_USER` / `AGENT_QUEUE_WAIT_MS`；compose healthcheck 为 `healthy`；日志轮转开启；Nginx 上传上限与后端 200MB 单批限制对齐。
+* `server/.env` 权限 600；`EDUPI_SETTINGS_SECRET` 必须单独异地备份，否则数据库内的加密模型密钥/MCP 配置无法解密。
 * 每日备份 SQLite、uploads 与 `.env`：运行 `npm run backup`（可加 `-- --with-uploads`），备份写入 `data/backups/`；每月至少做一次恢复检查，恢复后撤销全部会话。
 * 配置外部 uptime 与磁盘/内存告警；日志不记录密码、Cookie、token。
 * 提供 `/privacy`、`/terms` 与联系方式；大陆节点需完成 ICP 备案。
@@ -2331,9 +2392,13 @@ flowchart TD
 ```
 
 * 资源：仅对话/资料/出题用 2 vCPU / 4GB / 60GB；含扫描件 OCR 用 4 vCPU / 8GB / 80GB，并配置 2GB swap。
-* 端口：只暴露 80/443；应用 3000、Milvus 19530、Docling 5001 只监听内网或 Docker 网络；SSH 用密钥登录。
-* 配置：`.env` 权限 600，生产 `AUTH_ENABLED=1`、`COOKIE_SECURE=1`、`TRUST_PROXY=1`；首次管理员用 `npm run auth:bootstrap` 创建，不设默认密码。
-* 发布：备份 → 构建/拉镜像 → 迁移 → 启动 → `/health` 通过 → 冒烟（登录、对话、检索、上传）；失败回滚上一版本与数据库备份。
+* 端口：只暴露 80/443；应用容器只绑定 `127.0.0.1:3001`，由宿主机 Nginx 对外；Milvus 19530、Docling 5001 只监听内网或 Docker 网络；SSH 用密钥登录。
+* 配置：`.env` 权限 600，生产 `AUTH_ENABLED=1`、`COOKIE_SECURE=1`（HTTPS 就绪时）或 `auto`、`TRUST_PROXY=1`；多用户建议 `REGISTRATION_OPEN=0`；配置 `AGENT_MAX_CONCURRENT` / `AGENT_MAX_CONCURRENT_PER_USER` / `AGENT_QUEUE_WAIT_MS`。首次管理员用 `npm run auth:bootstrap` 创建，不设默认密码。
+
+* 运行形态：只跑一个 `edu-agent` 容器，SQLite 放在命名卷 `app_data`；compose healthcheck 请求 `/health`，日志使用 json-file 10m×3 轮转；`deploy/deploy.sh` 同步时排除 `server/.env`、`server/data`、`server/uploads`、`server/models`。
+* 发布：备份 SQLite/uploads/`.env` → 构建/拉镜像 → 迁移 → 启动 → 容器 `healthy` 且 `/health` 通过 → 冒烟（登录、对话、检索、上传、`check:multiuser:all`）；失败回滚上一版本镜像与数据库备份。
+
+* 当前生产 `8.148.185.212` 为 HTTP + Nginx 3000 直连，尚无域名证书；HTTPS 未完成前仅适合邀请制小范围使用。
 * 备份、监控与合规的最低要求见 §6.17；邮件验证、CAPTCHA、2FA、按账号配额本期不配置。
 
 
@@ -2380,10 +2445,12 @@ flowchart TD
 | 解题视频工作量大    | 涉及 TTS 与渲染管线               | 优先接外部 MCP，不早期自研             |
 | 本地模型能力受限    | 小模型在复杂推理上较弱                | 关键任务可切换云端模型，混合使用            |
 | 框架演进风险      | 依赖 Pi 与 MCP 生态             | 关注官方仓库活跃度，核心逻辑与框架解耦         |
-| 公网滥用与模型成本   | 公开注册可能被刷号、刷 token，直接消耗 API 额度 | 注册开关 + 登录限流 + 现有月预算；发现异常可关闭注册或停用账号 |
+| 公网滥用与模型成本   | 公开注册可能被刷号、刷 token，直接消耗 API 额度 | 生产默认关闭注册 + 登录限流 + 单用户/全局并发门限 + 现有月预算；发现异常可停用账号 |
 | 未成年人合规      | 目标用户含高中生，公开收集个人信息有监护人同意要求 | 最小化收集；隐私政策与协议；无法落实监护人同意时只做家庭部署 |
 | 单机运维风险      | 磁盘、内存、Docling 峰值导致服务不可用或数据丢失 | 资源余量、swap、磁盘/内存告警、每日备份与恢复演练 |
-| SQLite 并发上限   | 多账号同时长任务写入可能锁等待          | WAL、短事务、单 Worker；规模增长后再评估 PostgreSQL |
+| SQLite 并发上限   | 多账号同时长任务写入可能锁等待          | WAL、`busy_timeout=5000`、短事务、单 Worker、单实例；规模增长后再评估 PostgreSQL |
+| 多 Key 会话漂移 | 同一会话轮换不同 key 会复用旧 session，导致上下文跳变 | 会话固定 key；失败切换时删除旧 session 并从 DB 历史重建；`check-session-pinning.ts` 回归 |
+| 并发与内存增长 | 多用户同时聊天可能打满 provider 额度；会话缓存长期无界 | 全局/单用户并发门限 + 排队超时；AgentSession LRU/TTL；周期清理运行时表 |
 
 
 
@@ -2422,6 +2489,14 @@ flowchart TD
 14. 检索外部调用有显式超时、重试与降级；quiz 与 analysis 后台任务均可被 watchdog 中止。
 
 15. SSE 断线重发按 (learner_id, clientRequestId) 去重，可通过 check-sse-idempotency.ts 与 check-config-keys.ts 验证。
+
+16. 同一会话并发生成返回 409 `CONVERSATION_BUSY`，且只保留一条用户消息；可通过 `check-conversation-lock.ts` 验证。
+
+17. 单用户超过并发上限返回 429 `CHAT_BUSY`；全局满时排队，超时返回 429；可通过 `check-chat-gate.ts` 验证。
+
+18. 配置两个以上 provider key 时，同一会话连续三轮固定同一 key；失败切换用 DB 历史重建 session；可通过 `check-session-pinning.ts` 验证。
+
+19. AgentSession LRU/TTL、幂等表/答案缓存/已结束任务清理、SQLite `busy_timeout` 可通过 `check-multiuser.ts` 验证；生产 compose healthcheck 为 `healthy`。
 
 
 
@@ -3148,6 +3223,8 @@ flowchart LR
 | 有界自主 | `AGENT_MAX_TOOL_STEPS`、`AGENT_WALL_CLOCK_MS`、`AGENT_TOKEN_BUDGET`、`incomplete` 人工接管点 | 规划态无工具步数 / 墙钟 / token 上限；实现加入上限与接管点，`check-resilience.ts` 验证 |
 | 可观测 | `TRACE_LOG` | 规划态为健康检查 + 外部 uptime；实现新增 `TRACE_LOG` 追踪开关 |
 | 幂等 | `check-sse-idempotency.ts`、SSE `(learner_id, clientRequestId)` 去重 | 规划态未定义断线重发去重；实现按二元组去重，`check-config-keys.ts` 验证 |
+| 多用户运行护栏 | `server/src/chat/lock.ts`、`gate.ts`、`session-cache.ts`、`key-selection.ts`、`server/src/maintenance.ts`、compose healthcheck / logging | 规划态无会话锁、并发门限、session 上限；实现加入同会话 409、单用户/全局 429、固定 key、LRU/TTL、`busy_timeout=5000` 与周期清理 |
+| 多用户回归 | `check-multiuser.ts`、`check-session-pinning.ts`、`check-conversation-lock.ts`、`check-chat-gate.ts`、`npm run check:multiuser:all` | 规划态无并发/多 key 回归；实现覆盖固定 key、409、429、缓存淘汰、维护清理与排队 |
 | 错误响应 | `MCP_CONFIRMATION_REQUIRED`；统一错误响应（不含堆栈 / 数据库细节） | 规划态未定义 MCP 确认错误码；实现返回 `MCP_CONFIRMATION_REQUIRED` 且错误响应不泄露细节 |
 
 > 本附录与正文冲突时，以本附录与当前代码为准；代码为最终事实基线。

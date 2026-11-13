@@ -1,5 +1,5 @@
 /**
- * C11 回归：配置项三方一致性（server/src 全部读取点 + web 构建变量 ↔ README ↔ 施工文档 §3）。
+ * C11 回归：配置项一致性（server/src + server/scripts 全部读取点 + web 构建变量 ↔ README 配置节）。
  * 防止新增开关只写进代码或只写进文档，造成配置漂移。
  *
  * 用法（在 server/ 目录下）：
@@ -14,19 +14,17 @@ const read = (relative: string): string => readFileSync(resolve(root, relative),
 const KEY = /`([A-Z][A-Z0-9_]{2,})`/g;
 const collect = (text: string): Set<string> => new Set([...text.matchAll(KEY)].map((m) => m[1]));
 
-const docSource = read('施工文档-EduPi代码整改.md');
-const section = docSource.split('## 3. 配置项总表')[1]?.split('\n---')[0] ?? '';
-// 只取表格第一列，避免把说明列里引用的既有键误判为新增键。
+// README 配置节是唯一登记源；旧施工文档已删除，不再作为门禁依赖。
+// 只取表格第一列，避免把说明列里引用的错误码（如 MCP_CONFIRMATION_REQUIRED）误判为配置键。
+const readmeSource = read('README.md');
+const readmeSection = readmeSource.split('## 配置')[1]?.split('## 数据与检索')[0] ?? '';
 const docKeys = new Set<string>();
-for (const line of section.split('\n')) {
+for (const line of readmeSection.split('\n')) {
   if (!line.startsWith('|')) continue;
   const firstCell = line.split('|')[1] ?? '';
   for (const match of firstCell.matchAll(KEY)) docKeys.add(match[1]);
 }
-
-const readmeSource = read('README.md');
-const readmeSection = readmeSource.split('## 配置')[1]?.split('## 数据与检索')[0] ?? '';
-const readmeKeys = collect(readmeSection);
+const readmeKeys = new Set(docKeys);
 
 function walk(dir: string, pattern: RegExp, output: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -64,7 +62,7 @@ function report(ok: boolean, name: string, detail = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`);
 }
 
-report(docKeys.size >= 20, 'config table parsed', `${docKeys.size} keys`);
+report(docKeys.size >= 20, 'README config section parsed', `${docKeys.size} keys`);
 const missingInReadme = [...docKeys].filter((key) => !readmeKeys.has(key));
 report(missingInReadme.length === 0, 'every documented key appears in README', missingInReadme.join(', '));
 const missingInCode = [...docKeys].filter((key) => !codeKeys.has(resolveKey(key)));

@@ -86,6 +86,7 @@ npm run dev                # server 3000 + web 5173
 | `npm run auth:migrate` | 账号迁移检查；`-- --reindex` 强制重建向量 |
 | `npm run backup` | SQLite 备份到 `data/backups`；`-- --with-uploads` 同时备份 uploads |
 | `npm run bench:s23` | RAG 冷/热延迟与缓存命中；`-- --chat` 测 TTFT/P95 |
+| `npm run check:multiuser:all --workspace server` | 多用户回归：固定 key、会话锁、并发门限、缓存与维护清理 |
 | `npm run milvus:up` / `down` / `health` | compose 整体启停与健康检查（会连带应用容器） |
 | `npm run docling:up` / `down` / `models` | Docling 启停与模型下载 |
 | `npm run asr:model` | 下载本地 ASR 模型 |
@@ -186,9 +187,21 @@ npm run dev                # server 3000 + web 5173
 - **后台任务**：`server/src/tasks/queue.ts` watchdog 用 `AbortController` 真正中止，`signal` 已贯穿 quiz 与 analysis；`TASK_RETRY_MAX` 控制失败重试（指数退避 + 抖动）。
 - **可观测范围**：`trace_id` 进入 SSE 事件、`usage_records.trace_id` 与可选 stdout（`TRACE_LOG=1`，入参出参脱敏）；**无独立 span/链路存储、无跨服务传播、无可视化查询**。
 - **错误响应**：新增与关键路径返回 `{code, error, message}` 双写；历史校验分支仍为 `{ error }` 单写，前端统一按 `error ?? message` 兼容。
+- **多用户错误码**：同会话并发生成返回 `409 CONVERSATION_BUSY`；单用户或全局并发超限返回 `429 CHAT_BUSY`（全局满时先按 `AGENT_QUEUE_WAIT_MS` 排队）。
 - **评测口径**：`eval-rag.ts` 已实现 Hit@1/3/5、Recall@5、MRR、P50/P95 及高级指标 Precision@5、nDCG@5、引用命中率(Citation Precision@5)；`引用正确率` 为答案级判定，缺 `expected_citations` 与生成答案标注时输出「不可计算」，有标注时仅输出**检索级代理**并明确标注；标注缺失不算失败（退出码 0）。四方案离线对比未实现。
 - **工程配置**：`server/tsconfig.json` 启用 `allowImportingTsExtensions`（仓库全部使用 `.ts` 后缀导入，避免 TS5097），`noEmit: true` 必须保留；仅影响 `npx tsc --noEmit` 门禁，运行时由 jiti 加载不受影响。
 - **连接池**：依赖 Node 原生 fetch 的 undici keep-alive 默认行为，未引入显式连接池；工具并行调用未实现。
+
+### 多用户运行护栏（v0.32）
+
+- **单实例约束**：默认形态是一个 Node 进程 + 一个 SQLite 文件；不要让多个应用容器共享同一个 `app_data` 卷。SQLite 已设 WAL 与 `busy_timeout=5000`，但不等同于多写实例。
+- **会话固定 Key**：同一 `learner_id + conversation_id + role` 正常路径固定一个 provider key；只有调用失败才切换，并用数据库历史重建 session，避免多 key 轮换导致上下文跳变。
+- **会话互斥**：同一会话同时只允许一个生成任务；第二个请求返回 `409 CONVERSATION_BUSY`，且不会写入第二条用户消息。
+- **并发门限**：`AGENT_MAX_CONCURRENT`（全局，默认 6）与 `AGENT_MAX_CONCURRENT_PER_USER`（单用户，默认 2）；超限返回 `429 CHAT_BUSY`，全局满时最多排队 `AGENT_QUEUE_WAIT_MS`。
+- **缓存上限**：Pi `AgentSession` 使用 LRU + 空闲 TTL（默认 300 条 / 60 分钟），避免长期运行内存无界增长。
+- **周期清理**：`MAINTENANCE_INTERVAL_HOURS=6` 清理过期 `chat_idempotency`、`answer_cache` 与已结束 `tasks`。
+- **容器运维护栏**：compose 带 `/health` healthcheck 与 json-file 日志轮转；Nginx 上传上限 210m，与应用 200MB 单批限制对齐。
+- **生产建议**：多用户公网部署设 `REGISTRATION_OPEN=0`，由管理员建号；`.env` 权限 600，并单独备份 `EDUPI_SETTINGS_SECRET`。
 
 ## 数据与检索
 
@@ -295,11 +308,15 @@ APP_PORT=3100 docker compose -f docker/docker-compose.yml up -d edu-agent
 - 应用、Milvus、Docling 可分开运行；Docling 通过 compose profile `docling` 启停。
 - SQLite 与记忆/课件镜像放命名卷 `app_data`，上传文件挂载 `server/uploads`；不要把 SQLite 放回 Windows bind mount。
 - 公网部署需配置 HTTPS 反向代理、Secure Cookie 与每日备份；管理员可在「账号管理 → 上线检查」查看认证、注册、HTTPS 与最近备份状态。
-- 备份：`npm run backup`，恢复后建议撤销全部会话。
+- 多用户部署建议只跑一个 `edu-agent` 容器，容器绑定 `127.0.0.1:3001`，由宿主机 Nginx 对外；compose 已配置 `/health` healthcheck 与 10m×3 日志轮转。
+- `deploy/deploy.sh` 默认同步代码时会排除 `server/.env`、`server/data`、`server/uploads` 与 `server/models`，服务器 `.env` 由运维单独维护，避免本地配置覆盖生产密钥。
+- 生产建议 `REGISTRATION_OPEN=0`，由管理员建号；如需开放注册，再显式改回 `1` 并重启容器。
+- 备份：`npm run backup -- --with-uploads`，恢复后建议撤销全部会话；`.env`（尤其 `EDUPI_SETTINGS_SECRET`）必须异地保存。
+- 当前服务器 `8.148.185.212` 仍是 HTTP + Nginx 3000 直连；HTTPS 域名证书未配置，属于真实多用户上线前的阻断项。
 
 ## 已知限制与后续
 
-- 快模型分级路由已提供 `FAST_MODEL_ID`（默认关闭，仅作用于轻量路由场景）；并发压测仍待补。
+- 快模型分级路由已提供 `FAST_MODEL_ID`（默认关闭，仅作用于轻量路由场景）；已完成会话锁/并发门限/多 key 固定等功能级并发回归，50+ 用户压力测试仍未做。
 - MCP 副作用工具采用配置期显式授权，不在对话中途弹窗确认。
 - 部分非核心体验仍在后续：MCP 断线重连/日志/推荐模板、复盘报告导出、可视化动画与联动高亮。
 - 复盘当前只支持单文件图片或 PDF；多图自动拼接、纠偏、分页、确定性自动判分未实现；统计只到题型与知识点。
