@@ -27,6 +27,8 @@ import {
   type MediaRow,
 } from '../media/service.ts';
 import { manualContinuationPrompt } from './integrity.ts';
+import { ConversationBusyError, isConversationBusy } from './lock.ts';
+import { ChatBusyError, chatGate } from './gate.ts';
 import { generateVisualization, shouldAutoVisualize } from '../learning/visualize-engine.ts';
 import { getUnifiedVisualization, type UnifiedVisualization } from '../learning/visualize.ts';
 import { modelOrDefault, modelSupportsVision } from '../settings/providers.ts';
@@ -83,6 +85,26 @@ function mediaErrorResponse(c: Context, error: unknown): Response | null {
     return c.json({ code: error.code, error: error.message, message: error.message }, error.status as 400);
   }
   return null;
+}
+
+function conversationBusyResponse(c: Context): Response {
+  return c.json(
+    {
+      code: 'CONVERSATION_BUSY',
+      error: '该会话正在生成回复，请等待完成后再发送',
+      message: '该会话正在生成回复，请等待完成后再发送',
+    },
+    409,
+  );
+}
+
+function chatBusyResponse(c: Context, error: ChatBusyError): Response {
+  return c.json({ code: error.code, error: error.message, message: error.message }, 429);
+}
+
+function perUserBusyResponse(c: Context): Response {
+  const message = '你已有正在生成的回复，请等待完成后再发送';
+  return c.json({ code: 'CHAT_BUSY', error: message, message }, 429);
 }
 
 /** 短小事实型问题默认降低思考强度；复杂题仍沿用设置或用户指定。 */
@@ -201,6 +223,8 @@ async function handleContinuation(
     preset ??
     (body.conversationId?.trim() ? getConversation(body.conversationId.trim()) : undefined);
   if (!conversation) return c.json({ error: '继续或重新生成需要已有会话' }, 400);
+  if (isConversationBusy(conversation.conversation_id)) return conversationBusyResponse(c);
+  if (chatGate.wouldExceedPerUser(currentLearnerId())) return perUserBusyResponse(c);
 
   const assistant = lastMessageByRole(conversation.conversation_id, 'assistant');
   if (!assistant) return c.json({ error: '该会话还没有可续写的回复' }, 400);
@@ -362,6 +386,8 @@ async function handleContinuation(
       trace_id: traceId,
     });
   } catch (e) {
+    if (e instanceof ConversationBusyError) return conversationBusyResponse(c);
+    if (e instanceof ChatBusyError) return chatBusyResponse(c, e);
     return c.json({ error: e instanceof Error ? e.message : String(e), trace_id: traceId }, 502);
   }
 }
@@ -516,6 +542,15 @@ export async function handleChat(
     } else {
       conversation = createConversation();
     }
+  }
+
+  if (isConversationBusy(conversation.conversation_id)) {
+    if (requestId) failIdempotency(requestId);
+    return conversationBusyResponse(c);
+  }
+  if (chatGate.wouldExceedPerUser(currentLearnerId())) {
+    if (requestId) failIdempotency(requestId);
+    return perUserBusyResponse(c);
   }
 
   const attachments = mediaRows.map((row, index) =>
@@ -837,6 +872,8 @@ export async function handleChat(
     });
   } catch (e) {
     settleIdempotency();
+    if (e instanceof ConversationBusyError) return conversationBusyResponse(c);
+    if (e instanceof ChatBusyError) return chatBusyResponse(c, e);
     const messageText = e instanceof Error ? e.message : String(e);
     return c.json({ error: messageText, message: messageText, trace_id: traceId }, 502);
   }

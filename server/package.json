@@ -15,7 +15,12 @@
     "asr:model": "node --import jiti/register scripts/fetch-asr-model.ts",
     "backup": "node --import jiti/register scripts/backup.ts",
     "auth:admin-check": "node --import jiti/register scripts/check-admin.ts",
-    "bench:s23": "node --import jiti/register scripts/bench-s23.ts"
+    "bench:s23": "node --import jiti/register scripts/bench-s23.ts",
+    "check:multiuser": "node --import jiti/register scripts/check-multiuser.ts",
+    "check:pinning": "node --import jiti/register scripts/check-session-pinning.ts",
+    "check:lock": "node --import jiti/register scripts/check-conversation-lock.ts",
+    "check:gate": "node --import jiti/register scripts/check-chat-gate.ts",
+    "check:multiuser:all": "node --import jiti/register scripts/check-multiuser.ts && node --import jiti/register scripts/check-session-pinning.ts && node --import jiti/register scripts/check-conversation-lock.ts && node --import jiti/register scripts/check-chat-gate.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.0",

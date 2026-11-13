@@ -150,7 +150,12 @@ npm run dev                # server 3000 + web 5173
 | `TASK_TIMEOUT_MS` | 180000 | 后台任务 watchdog 超时 |
 | `TASK_RETRY_MAX` | 3 | 后台任务失败重试次数 |
 | `DAILY_PRACTICE_COUNT` | 5 | 每日练习题目数，夹取 3–10 |
-| `LLM_KEY_MAX_ATTEMPTS` | 3 | 单次请求最多轮换的密钥数 |
+| `LLM_KEY_MAX_ATTEMPTS` | 3 | 单次请求最多轮换的密钥数；同一会话正常路径固定一个 key |
+| `AGENT_SESSION_MAX` / `AGENT_SESSION_TTL_MIN` | 300 / 60 | Pi 会话缓存条数上限与空闲过期分钟数，0=不限制 |
+| `AGENT_MAX_CONCURRENT` / `AGENT_MAX_CONCURRENT_PER_USER` | 6 / 2 | 聊天全局/单用户并发上限，0=不限制 |
+| `AGENT_QUEUE_WAIT_MS` | 15000 | 全局并发满时的最长排队时间，超时返回 429 |
+| `MAINTENANCE_INTERVAL_HOURS` | 6 | 运行时表清理周期，0=关闭 |
+| `IDEMPOTENCY_RETENTION_HOURS` / `TASK_RETENTION_DAYS` | 24 / 30 | 幂等记录与已结束任务保留时间 |
 | `TTS_DEFAULT_VOLUME` | 1 | TTS 默认音量 0–1；客户端应用参数，服务端仅校验与回显，不送入 /audio/speech（OpenAI 兼容接口无标准音量参数），实际音量由浏览器 Audio.volume / SpeechSynthesisUtterance.volume 应用 |
 | `SSE_RETRY_MAX`（前端 `VITE_SSE_RETRY_MAX`） | 2 | 前端 SSE 未收到任何事件时的重连次数，0=关闭 |
 | `EVAL_ENABLE_ADVANCED` | 0 | 输出 Precision@K / nDCG@K 等高级评测指标 |

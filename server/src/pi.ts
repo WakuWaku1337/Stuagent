@@ -11,6 +11,7 @@ import {
 import { createKnowledgeTool } from './rag/tool.ts';
 import type { Citation } from './rag/service.ts';
 import { createLearningTools } from './learning/tools.ts';
+import { currentLearnerId } from './learning/context.ts';
 import { createMcpTools } from './mcp/service.ts';
 import { profileContext } from './learning/memory.ts';
 import { redactPII } from './security/guard.ts';
@@ -36,6 +37,8 @@ import {
 import { recordUsage } from './usage/store.ts';
 import {
   AGENT_MAX_TOOL_STEPS,
+  AGENT_SESSION_MAX,
+  AGENT_SESSION_TTL_MIN,
   AGENT_TOKEN_BUDGET,
   AGENT_WALL_CLOCK_MS,
   HISTORY_ITEM_MAX_CHARS,
@@ -43,6 +46,10 @@ import {
   historyReplayLimit,
 } from './config.ts';
 import { currentTraceId } from './trace.ts';
+import { SessionCache } from './chat/session-cache.ts';
+import { orderKeyCandidates } from './chat/key-selection.ts';
+import { acquireConversationLock, ConversationBusyError } from './chat/lock.ts';
+import { chatGate } from './chat/gate.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const dataRoot = process.env.EDU_DATA_DIR?.trim()
@@ -87,8 +94,13 @@ interface RuntimeBundle {
 
 let runtimePromise: Promise<RuntimeBundle> | null = null;
 
-const sessions = new Map<string, AgentSession>();
+const sessions = new SessionCache<AgentSession>({
+  max: AGENT_SESSION_MAX,
+  ttlMs: AGENT_SESSION_TTL_MIN * 60_000,
+});
 const citationSinks = new Map<string, (c: Citation[]) => void>();
+/** 会话固定的 provider key：同一会话正常路径只使用一个 key */
+const conversationKeys = new Map<string, string>();
 let candidateCursor = 0;
 
 function buildModelEntry(modelId: string) {
@@ -180,6 +192,7 @@ export function resetPiRuntime(): void {
   runtimePromise = null;
   sessions.clear();
   citationSinks.clear();
+  conversationKeys.clear();
 }
 
 function replaySession(agentId: AgentId, candidate: Candidate, history: ChatHistoryItem[]): SessionManager {
@@ -263,9 +276,16 @@ async function getSession(
 }
 
 export function dropConversationSessions(conversationId: string): void {
-  for (const key of [...sessions.keys()]) {
-    if (key.split(':')[1] === conversationId) sessions.delete(key);
+  sessions.deleteWhere((key) => key.split(':')[1] === conversationId);
+  for (const key of [...conversationKeys.keys()]) {
+    if (key.split(':')[1] === conversationId) conversationKeys.delete(key);
   }
+}
+
+/** 切换 provider key 时只丢弃该角色在该会话下的旧 session，确保从 DB 历史重建。 */
+function dropAgentConversationSessions(agentId: AgentId, conversationId: string): void {
+  sessions.deleteWhere((key) => key.startsWith(`${agentId}:${conversationId}:`));
+  conversationKeys.delete(`${agentId}:${conversationId}`);
 }
 
 export async function getModelInfo() {
@@ -350,11 +370,15 @@ export async function chat(
   if (available.length === 0) {
     throw new Error(keyAvailabilityMessage(settings.provider) || '全部密钥处于冷却中，请稍后再试');
   }
-  const start = candidateCursor % available.length;
-  candidateCursor += 1;
-  const rotated = [...available.slice(start), ...available.slice(0, start)];
-  // 先轮换起点，再按配置截断，避免主对话一次耗尽全部密钥
-  const ordered = rotated.slice(0, LLM_KEY_MAX_ATTEMPTS);
+  const conversationKey = `${agentId}:${sessionId}`;
+  const pinnedKeyId = conversationKeys.get(conversationKey);
+  const { ordered, nextCursor } = orderKeyCandidates(
+    available,
+    pinnedKeyId,
+    candidateCursor,
+    LLM_KEY_MAX_ATTEMPTS,
+  );
+  candidateCursor = nextCursor;
   const reasoning = options.reasoning ?? settings.reasoning;
   const profile = profileContext();
   const promptText = profile ? `【学习者画像】\n${profile}\n\n【学生输入】\n${message}` : message;
@@ -368,203 +392,226 @@ export async function chat(
       : timeoutSignal
     : signal;
 
-  for (const candidate of ordered) {
-    if (effectiveSignal?.aborted) throw new DOMException('已取消', 'AbortError');
-    const sessionKey = `${agentId}:${sessionId}:${candidate.providerId}`;
-    const started = Date.now();
-    let fullText = '';
-    let errorMessage = '';
-    let usageTotals = { input: 0, output: 0, total: 0, reasoning: 0, cost: 0 };
-    let emitted = false;
-    let stopReason = '';
-    let continuing = false;
-    let continuationText = '';
-    let lastThinkingAt = 0;
-    let limitHit: 'wall_clock' | 'token_budget' | 'tool_steps' | null = null;
-    let toolSteps = 0;
-
-    try {
-      const session = await getSession(sessionId, agentId, candidate, reasoning, options.history);
-      const sink = (citations: Citation[]) => onEvent({ type: 'citations', citations });
-      citationSinks.set(sessionKey, sink);
-      markKeyUsed(candidate.keyId);
-
-      const unsubscribe = session.subscribe((event) => {
-        if (event.type === 'tool_execution_start') {
-          toolSteps += 1;
-          if (AGENT_MAX_TOOL_STEPS > 0 && toolSteps >= AGENT_MAX_TOOL_STEPS && !limitHit) {
-            limitHit = 'tool_steps';
-            session.abort();
-          }
-          return;
-        }
-        if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta') {
-          const now = Date.now();
-          if (now - lastThinkingAt > 800) {
-            lastThinkingAt = now;
-            onEvent({ type: 'thinking' });
-          }
-          return;
-        }
-        if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-          const delta = event.assistantMessageEvent.delta;
-          if (continuing) {
-            continuationText += delta;
-          } else {
-            fullText += delta;
-            emitted = true;
-            onEvent({ type: 'delta', text: delta });
-          }
-        } else if (event.type === 'message_end') {
-          const msg = event.message as { role?: string; stopReason?: string; errorMessage?: string };
-          if (msg.role === 'assistant') {
-            stopReason = msg.stopReason ?? '';
-            const usage = usageFromMessage(event.message);
-            if (usage) {
-              usageTotals = {
-                input: usageTotals.input + usage.input,
-                output: usageTotals.output + usage.output,
-                total: usageTotals.total + usage.total,
-                reasoning: usageTotals.reasoning + usage.reasoning,
-                cost: usageTotals.cost + usage.cost,
-              };
-              if (AGENT_TOKEN_BUDGET > 0 && usageTotals.total >= AGENT_TOKEN_BUDGET && !limitHit) {
-                limitHit = 'token_budget';
-                session.abort();
-              }
-            }
-            if (msg.stopReason === 'error') {
-              errorMessage = msg.errorMessage ?? '模型调用失败';
-            }
-          }
-        }
-      });
-
-      const abortHandler = () => session.abort();
-      effectiveSignal?.addEventListener('abort', abortHandler);
-      let attempts = 0;
-      try {
-        try {
-          await session.prompt(promptText, options.images?.length ? { images: options.images } : undefined);
-          // 等 session 完全空闲，避免续写提示与尾部分片并发
-          await session.waitForIdle();
-        } catch (error) {
-          const capped = limitHit !== null || (timeoutSignal?.aborted === true && signal?.aborted !== true);
-          if (!capped) throw error;
-        }
-
-        while (
-          !effectiveSignal?.aborted &&
-          attempts < MAX_CONTINUATIONS &&
-          (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText)))
-        ) {
-          attempts += 1;
-          onEvent({ type: 'continuation', attempt: attempts });
-          continuing = true;
-          continuationText = '';
-          stopReason = '';
-          let continuationFailed = false;
-          for (let retry = 0; retry < 2 && !effectiveSignal?.aborted; retry += 1) {
-            try {
-              await session.prompt(continuationPrompt(fullText, attempts));
-              continuationFailed = false;
-              break;
-            } catch {
-              continuationFailed = true;
-              await new Promise((resolve) => setTimeout(resolve, 200));
-            }
-          }
-          continuing = false;
-          await session.waitForIdle();
-          const merged = mergeContinuation(fullText, continuationText);
-          const addition = merged.slice(fullText.length);
-          if (addition) {
-            fullText = merged;
-            emitted = true;
-            onEvent({ type: 'delta', text: addition });
-          }
-          if (continuationFailed || !addition) break;
-        }
-        if (!limitHit && timeoutSignal?.aborted && signal?.aborted !== true) {
-          limitHit = 'wall_clock';
-        }
-        if (limitHit) {
-          onEvent({ type: 'incomplete', message: limitMessage(limitHit), attempt: attempts });
-        } else if (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText))) {
-          onEvent({
-            type: 'incomplete',
-            message: '输出可能被截断，可点击“继续生成”或“重新生成”',
-            attempt: attempts,
-          });
-        }
-      } finally {
-        unsubscribe();
-        citationSinks.delete(sessionKey);
-        effectiveSignal?.removeEventListener('abort', abortHandler);
-      }
-
-      if (errorMessage) throw new Error(errorMessage);
-      if (limitHit && !fullText.trim()) {
-        // 带上限标记的空回复视为中止，避免把预算/步数上限误记为密钥故障
-        throw new DOMException(limitMessage(limitHit), 'AbortError');
-      }
-
-      const latencyMs = Date.now() - started;
-      recordUsage({
-        provider: settings.provider,
-        model: settings.model,
-        scenario: 'chat',
-        promptTokens: usageTotals.input,
-        completionTokens: usageTotals.output,
-        totalTokens: usageTotals.total,
-        reasoningTokens: usageTotals.reasoning,
-        latencyMs,
-        cost: usageTotals.cost,
-        success: true,
-        keyId: candidate.keyId,
-        traceId: traceId || undefined,
-      });
-      markKeySuccess(candidate.keyId);
-      onEvent({ type: 'done', text: fullText });
-      return fullText;
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      const aborted = error instanceof DOMException && error.name === 'AbortError';
-      const latencyMs = Date.now() - started;
-      recordUsage({
-        provider: settings.provider,
-        model: settings.model,
-        scenario: 'chat',
-        promptTokens: usageTotals.input,
-        completionTokens: usageTotals.output,
-        totalTokens: usageTotals.total,
-        reasoningTokens: usageTotals.reasoning,
-        latencyMs,
-        cost: usageTotals.cost,
-        success: false,
-        error: messageText,
-        keyId: candidate.keyId,
-        traceId: traceId || undefined,
-      });
-      const status = inferStatus(messageText);
-      if (
-        !aborted &&
-        (status === null || status === 401 || status === 403 || status === 408 || status === 409 || status === 429 || status >= 500)
-      ) {
-        markKeyFailure(candidate.keyId, status, messageText);
-      }
-      sessions.delete(sessionKey);
-      failures.push(`${candidate.keyLabel || candidate.keyId}: ${messageText}`);
-      lastError = error instanceof Error ? error : new Error(messageText);
-      if (aborted || emitted) {
-        onEvent({ type: 'error', message: messageText });
-        throw lastError;
-      }
-    }
+  const lockOwner = traceId || `${process.pid}-${Date.now()}`;
+  const releaseConversation = acquireConversationLock(sessionId, lockOwner);
+  if (!releaseConversation) {
+    throw new ConversationBusyError();
+  }
+  let releaseSlot: (() => void) | null = null;
+  try {
+    releaseSlot = await chatGate.acquire(currentLearnerId());
+  } catch (error) {
+    releaseConversation();
+    throw error;
   }
 
-  const detail = failures.length > 1 ? `（已尝试 ${failures.length} 个密钥）` : '';
-  const finalError = new Error((lastError?.message ?? '模型调用失败') + detail);
-  onEvent({ type: 'error', message: finalError.message });
-  throw finalError;
+  try {
+    for (const candidate of ordered) {
+      if (effectiveSignal?.aborted) throw new DOMException('已取消', 'AbortError');
+      if (pinnedKeyId && pinnedKeyId !== candidate.keyId) {
+        // 固定 key 失效后才切换；丢弃旧 session，确保从数据库历史完整回放
+        dropAgentConversationSessions(agentId, sessionId);
+      }
+      const sessionKey = `${agentId}:${sessionId}:${candidate.providerId}`;
+      const started = Date.now();
+      let fullText = '';
+      let errorMessage = '';
+      let usageTotals = { input: 0, output: 0, total: 0, reasoning: 0, cost: 0 };
+      let emitted = false;
+      let stopReason = '';
+      let continuing = false;
+      let continuationText = '';
+      let lastThinkingAt = 0;
+      let limitHit: 'wall_clock' | 'token_budget' | 'tool_steps' | null = null;
+      let toolSteps = 0;
+
+      try {
+        const session = await getSession(sessionId, agentId, candidate, reasoning, options.history);
+        const sink = (citations: Citation[]) => onEvent({ type: 'citations', citations });
+        citationSinks.set(sessionKey, sink);
+        markKeyUsed(candidate.keyId);
+
+        const unsubscribe = session.subscribe((event) => {
+          if (event.type === 'tool_execution_start') {
+            toolSteps += 1;
+            if (AGENT_MAX_TOOL_STEPS > 0 && toolSteps >= AGENT_MAX_TOOL_STEPS && !limitHit) {
+              limitHit = 'tool_steps';
+              session.abort();
+            }
+            return;
+          }
+          if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta') {
+            const now = Date.now();
+            if (now - lastThinkingAt > 800) {
+              lastThinkingAt = now;
+              onEvent({ type: 'thinking' });
+            }
+            return;
+          }
+          if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+            const delta = event.assistantMessageEvent.delta;
+            if (continuing) {
+              continuationText += delta;
+            } else {
+              fullText += delta;
+              emitted = true;
+              onEvent({ type: 'delta', text: delta });
+            }
+          } else if (event.type === 'message_end') {
+            const msg = event.message as { role?: string; stopReason?: string; errorMessage?: string };
+            if (msg.role === 'assistant') {
+              stopReason = msg.stopReason ?? '';
+              const usage = usageFromMessage(event.message);
+              if (usage) {
+                usageTotals = {
+                  input: usageTotals.input + usage.input,
+                  output: usageTotals.output + usage.output,
+                  total: usageTotals.total + usage.total,
+                  reasoning: usageTotals.reasoning + usage.reasoning,
+                  cost: usageTotals.cost + usage.cost,
+                };
+                if (AGENT_TOKEN_BUDGET > 0 && usageTotals.total >= AGENT_TOKEN_BUDGET && !limitHit) {
+                  limitHit = 'token_budget';
+                  session.abort();
+                }
+              }
+              if (msg.stopReason === 'error') {
+                errorMessage = msg.errorMessage ?? '模型调用失败';
+              }
+            }
+          }
+        });
+
+        const abortHandler = () => session.abort();
+        effectiveSignal?.addEventListener('abort', abortHandler);
+        let attempts = 0;
+        try {
+          try {
+            await session.prompt(promptText, options.images?.length ? { images: options.images } : undefined);
+            // 等 session 完全空闲，避免续写提示与尾部分片并发
+            await session.waitForIdle();
+          } catch (error) {
+            const capped = limitHit !== null || (timeoutSignal?.aborted === true && signal?.aborted !== true);
+            if (!capped) throw error;
+          }
+
+          while (
+            !effectiveSignal?.aborted &&
+            attempts < MAX_CONTINUATIONS &&
+            (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText)))
+          ) {
+            attempts += 1;
+            onEvent({ type: 'continuation', attempt: attempts });
+            continuing = true;
+            continuationText = '';
+            stopReason = '';
+            let continuationFailed = false;
+            for (let retry = 0; retry < 2 && !effectiveSignal?.aborted; retry += 1) {
+              try {
+                await session.prompt(continuationPrompt(fullText, attempts));
+                continuationFailed = false;
+                break;
+              } catch {
+                continuationFailed = true;
+                await new Promise((resolve) => setTimeout(resolve, 200));
+              }
+            }
+            continuing = false;
+            await session.waitForIdle();
+            const merged = mergeContinuation(fullText, continuationText);
+            const addition = merged.slice(fullText.length);
+            if (addition) {
+              fullText = merged;
+              emitted = true;
+              onEvent({ type: 'delta', text: addition });
+            }
+            if (continuationFailed || !addition) break;
+          }
+          if (!limitHit && timeoutSignal?.aborted && signal?.aborted !== true) {
+            limitHit = 'wall_clock';
+          }
+          if (limitHit) {
+            onEvent({ type: 'incomplete', message: limitMessage(limitHit), attempt: attempts });
+          } else if (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText))) {
+            onEvent({
+              type: 'incomplete',
+              message: '输出可能被截断，可点击“继续生成”或“重新生成”',
+              attempt: attempts,
+            });
+          }
+        } finally {
+          unsubscribe();
+          citationSinks.delete(sessionKey);
+          effectiveSignal?.removeEventListener('abort', abortHandler);
+        }
+
+        if (errorMessage) throw new Error(errorMessage);
+        if (limitHit && !fullText.trim()) {
+          // 带上限标记的空回复视为中止，避免把预算/步数上限误记为密钥故障
+          throw new DOMException(limitMessage(limitHit), 'AbortError');
+        }
+
+        const latencyMs = Date.now() - started;
+        recordUsage({
+          provider: settings.provider,
+          model: settings.model,
+          scenario: 'chat',
+          promptTokens: usageTotals.input,
+          completionTokens: usageTotals.output,
+          totalTokens: usageTotals.total,
+          reasoningTokens: usageTotals.reasoning,
+          latencyMs,
+          cost: usageTotals.cost,
+          success: true,
+          keyId: candidate.keyId,
+          traceId: traceId || undefined,
+        });
+        markKeySuccess(candidate.keyId);
+        conversationKeys.set(conversationKey, candidate.keyId);
+        onEvent({ type: 'done', text: fullText });
+        return fullText;
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        const aborted = error instanceof DOMException && error.name === 'AbortError';
+        const latencyMs = Date.now() - started;
+        recordUsage({
+          provider: settings.provider,
+          model: settings.model,
+          scenario: 'chat',
+          promptTokens: usageTotals.input,
+          completionTokens: usageTotals.output,
+          totalTokens: usageTotals.total,
+          reasoningTokens: usageTotals.reasoning,
+          latencyMs,
+          cost: usageTotals.cost,
+          success: false,
+          error: messageText,
+          keyId: candidate.keyId,
+          traceId: traceId || undefined,
+        });
+        const status = inferStatus(messageText);
+        if (
+          !aborted &&
+          (status === null || status === 401 || status === 403 || status === 408 || status === 409 || status === 429 || status >= 500)
+        ) {
+          markKeyFailure(candidate.keyId, status, messageText);
+        }
+        sessions.delete(sessionKey);
+        failures.push(`${candidate.keyLabel || candidate.keyId}: ${messageText}`);
+        lastError = error instanceof Error ? error : new Error(messageText);
+        if (aborted || emitted) {
+          onEvent({ type: 'error', message: messageText });
+          throw lastError;
+        }
+      }
+    }
+
+    const detail = failures.length > 1 ? `（已尝试 ${failures.length} 个密钥）` : '';
+    const finalError = new Error((lastError?.message ?? '模型调用失败') + detail);
+    onEvent({ type: 'error', message: finalError.message });
+    throw finalError;
+  } finally {
+    releaseSlot?.();
+    releaseConversation();
+  }
 }

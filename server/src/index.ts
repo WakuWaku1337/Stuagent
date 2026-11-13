@@ -32,6 +32,7 @@ import { AGENTS } from './agents/roles.ts';
 import { startStorageJanitor } from './storage/service.ts';
 import { syncMcpJson } from './mcp/service.ts';
 import { recoverOcrJobs } from './documents/pdf-ocr.ts';
+import { startMaintenance } from './maintenance.ts';
 
 const serverRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const envPath = resolve(serverRoot, '.env');
@@ -172,6 +173,7 @@ injectWebSocket(server);
 startQueue();
 recoverOcrJobs();
 startStorageJanitor();
+startMaintenance();
 syncMcpJson().catch((error) => {
   console.error('[mcp] 同步 mcp.json 失败:', error instanceof Error ? error.message : error);
 });
