@@ -24,10 +24,13 @@
     "docling:up": "docker compose -f docker/docker-compose.yml --profile docling up -d docling-serve",
     "docling:down": "docker compose -f docker/docker-compose.yml --profile docling down docling-serve",
     "docling:models": "node docker/fetch-docling-model.mjs",
+    "check:viz": "npm run check:viz --workspace server",
+    "check:viz:snapshots": "npm run check:viz:snapshots --workspace server",
     "asr:model": "npm run asr:model --workspace server",
     "backup": "npm run backup --workspace server",
     "auth:admin-check": "npm run auth:admin-check --workspace server",
-    "bench:s23": "npm run bench:s23 --workspace server"
+    "bench:s23": "npm run bench:s23 --workspace server",
+    "migrate:viz": "npm run migrate:viz --workspace server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

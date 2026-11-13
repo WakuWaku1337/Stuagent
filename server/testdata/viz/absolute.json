@@ -1,0 +1,5 @@
+{
+  "name": "absolute",
+  "question": "画出函数 y=|x| 的图像",
+  "expected": { "curves": 1, "roots": 1, "extrema": 0, "regions": 0, "conicSegments": 0 }
+}

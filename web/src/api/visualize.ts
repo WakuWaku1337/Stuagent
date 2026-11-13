@@ -1,3 +1,5 @@
+import type { VizDiagnostic } from '../../../shared/viz/types';
+
 export type VisualizationType =
   | 'geometry3d'
   | 'function2d'
@@ -17,6 +19,9 @@ export interface Visualization {
   spec: Record<string, unknown>;
   source: string | null;
   created_at: number;
+  schema_version?: number;
+  input_text?: string | null;
+  diagnostics?: VizDiagnostic[];
   kind?: 'preset' | 'generated' | 'legacy';
   html_url?: string;
 }

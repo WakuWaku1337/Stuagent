@@ -13,7 +13,7 @@
 - **记忆与诊断**：长期记忆、学习者画像、BKT 掌握度、薄弱点推荐。
 - **出题与练习**：按知识点出题、按掌握度校准难度、每日练习、模拟考试、错题本与 SM-2 复习。
 - **考试复盘**：整卷识别、逐题判分、错因归类、趋势对比与复盘报告。
-- **统一可视化**：函数/圆锥曲线、立体几何、分子、物理场景、细胞结构等按题目内容确定性建模；预置模板 + 交互渲染。
+- **统一可视化**：9 种类型全部使用 VizPlan v2 严格语义场景；函数/圆锥曲线由项目内 SVG 渲染，立体几何/分子/地形/生物/物理由各自渲染器读取已校验 scene；预置模板直接保存 v2，另有像素基线 CI。
 - **MCP 扩展**：接入 stdio / HTTP / SSE MCP 服务，工具发现后按服务授权给子智能体。
 - **账号与隔离**：注册登录、会话管理、管理员账号页；每个账号独立拥有资料、对话、错题、媒体、任务与 RAG collection。
 
@@ -232,6 +232,8 @@ npm run dev                # server 3000 + web 5173
 | 设置/用量 | `/api/settings/model`、`/api/settings/generation`、`/api/settings/keys`、`/api/settings/*`；`/api/usage/summary`、`/daily`、`/cost`、`/export` |
 | 任务 | `POST/GET /api/tasks`、`/api/tasks/:id`、`POST /api/tasks/:id/cancel`；WebSocket `/ws` |
 
+> 可视化：`/api/visualize/generate` 的所有类型均返回 VizPlan v2（`schema_version=2`），并由 `shared/viz/schema.ts` 做严格场景校验；无法从题目建模时返回 422 `VIZ_UNSUPPORTED_STRUCTURE` 与 diagnostics，不再回退到模型手写 spec。
+
 ## 页面
 
 `/` 学习台、`/plan` 学习计划、`/chat` 对话、`/documents` 资料库、`/quiz` 智能出题、`/wrongbook` 错题本、`/mastery` 掌握度、`/exam` 模拟考试、`/tasks` 后台任务、`/review` 考试复盘、`/visualize` 统一可视化、`/settings` 模型设置、`/usage` 用量统计、`/storage` 存储治理、`/mcp` MCP 扩展、`/admin` 账号管理、`/account` 账号设置、`/privacy` 隐私政策、`/terms` 用户协议。
@@ -274,6 +276,9 @@ node --import jiti/register scripts/eval-rag.ts            # RAG 检索指标与
 node --import jiti/register scripts/check-docling.ts       # Docling 解析
 node --import jiti/register scripts/check-ocr.ts           # 扫描件 OCR 与校对
 node --import jiti/register scripts/check-visualize.ts     # 可视化建模
+npm run check:viz                                          # VizPlan v2 / SVG 编译 / 像素快照回归
+npm run check:viz:snapshots --workspace server -- --update # 更新像素基线
+npm run migrate:viz                                        # v1 → v2 可视化 dry-run（加 --apply 写库；支持 --limit/--batch-size/--strict-input）
 node --import jiti/register scripts/check-security.ts      # PII / 注入 / 切片脱敏
 node --import jiti/register scripts/check-mcp.ts           # MCP 授权与副作用确认
 node --import jiti/register scripts/check-sse-idempotency.ts  # SSE 幂等
@@ -320,7 +325,7 @@ APP_PORT=3100 docker compose -f docker/docker-compose.yml up -d edu-agent
 - MCP 副作用工具采用配置期显式授权，不在对话中途弹窗确认。
 - 部分非核心体验仍在后续：MCP 断线重连/日志/推荐模板、复盘报告导出、可视化动画与联动高亮。
 - 复盘当前只支持单文件图片或 PDF；多图自动拼接、纠偏、分页、确定性自动判分未实现；统计只到题型与知识点。
-- 可视化已支持 `abs`、三角/根式、`f(x)=`/`g(x)=` 定义与复合、`\begin{cases}` 分段函数；未实现极值/渐近线/切点/对称轴、分段函数参与复合、逐步辅助线与预置生物 3D 模型库。
+- 可视化已支持 `abs`（含 `|...|` 原生解析）、三角/根式、`f(x)=`/`g(x)=` 定义与复合、`\begin{cases}` 分段函数、根/交点/极值、x/y 双向条件区域、自适应圆锥曲线、全类型 VizPlan v2 严格 schema、预置原生 v2、批量迁移与 SVG 像素基线 CI；未实现渐近线/切点/对称轴、`f(x)=g(x)+1` 这类嵌套分段复合、逐步辅助线、预置生物 3D 模型库，以及 WebGL 浏览器截图基线。
 - 语音：ASR 仅支持 16-bit PCM WAV（sherpa-onnx Paraformer），云端 ASR、edge-tts / piper 与音频统一入库未实现；播放控制只有停止。
 - 上传：单文件 50MB、单次最多 50 个文件、单次总大小 200MB；不显示浏览器上传进度条。
 - MCP：`mcp.json` 不含密钥，Pi 原生 MCP 需要 env/headers 的场景请使用管理页配置。

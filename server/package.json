@@ -20,7 +20,10 @@
     "check:pinning": "node --import jiti/register scripts/check-session-pinning.ts",
     "check:lock": "node --import jiti/register scripts/check-conversation-lock.ts",
     "check:gate": "node --import jiti/register scripts/check-chat-gate.ts",
-    "check:multiuser:all": "node --import jiti/register scripts/check-multiuser.ts && node --import jiti/register scripts/check-session-pinning.ts && node --import jiti/register scripts/check-conversation-lock.ts && node --import jiti/register scripts/check-chat-gate.ts"
+    "check:multiuser:all": "node --import jiti/register scripts/check-multiuser.ts && node --import jiti/register scripts/check-session-pinning.ts && node --import jiti/register scripts/check-conversation-lock.ts && node --import jiti/register scripts/check-chat-gate.ts",
+    "check:viz": "node --import jiti/register scripts/check-viz-plan.ts && node --import jiti/register scripts/check-viz-render.ts && node --import jiti/register scripts/check-viz-snapshots.ts",
+    "check:viz:snapshots": "node --import jiti/register scripts/check-viz-snapshots.ts",
+    "migrate:viz": "node --import jiti/register scripts/migrate-viz-v2.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.0",

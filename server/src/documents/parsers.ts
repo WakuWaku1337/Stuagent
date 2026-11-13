@@ -83,12 +83,13 @@ export async function parseDoc(buffer: Buffer): Promise<ParsedBlock[]> {
 /** PDF：逐页提取文本，保留页码 */
 export async function parsePdf(buffer: Buffer): Promise<ParsedBlock[]> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const loadingTask = pdfjs.getDocument({
+  const params = {
     data: new Uint8Array(buffer),
     useSystemFonts: false,
     isEvalSupported: false,
     disableFontFace: true,
-  });
+  };
+  const loadingTask = pdfjs.getDocument(params as unknown as Parameters<typeof pdfjs.getDocument>[0]);
   const doc = await loadingTask.promise;
   const blocks: ParsedBlock[] = [];
   for (let i = 1; i <= doc.numPages; i++) {

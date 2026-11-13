@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus';
 import type { Visualization } from '../api/visualize';
 import { typeLabel } from '../utils/visualize';
 import ThreeScene from './viz/ThreeScene.vue';
-import FunctionChart from './viz/FunctionChart.vue';
+import CartesianPlot from './viz/CartesianPlot.vue';
 import MoleculeChart from './viz/MoleculeChart.vue';
 import ShapeSvg from './viz/ShapeSvg.vue';
 import LegacyFrame from './viz/LegacyFrame.vue';
@@ -18,13 +18,27 @@ const child = ref<{ reset: () => void; screenshot: () => Promise<string | null> 
 const wrap = ref<HTMLDivElement>();
 
 const is3D = computed(() => ['geometry3d', 'biology', 'function3d', 'terrain'].includes(props.visualization.type));
-const hasAux = computed(() => props.visualization.type === 'geometry3d' && Array.isArray(props.visualization.spec.auxiliary));
+const isCartesian = computed(() => props.visualization.type === 'function2d' || props.visualization.type === 'conic');
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+const sceneSpec = computed<Record<string, unknown>>(() => {
+  const spec = props.visualization.spec;
+  if (props.visualization.schema_version === 2 && spec.schema === 'edupi.viz/v2' && isRecord(spec.scene)) {
+    return spec.scene;
+  }
+  return spec;
+});
+const renderVisualization = computed(() => ({ ...props.visualization, spec: sceneSpec.value }));
+const hasAux = computed(() => props.visualization.type === 'geometry3d' && Array.isArray(sceneSpec.value.auxiliary));
 
 const component = computed(() => {
   const type = props.visualization.type;
   if (type === 'legacy-html') return LegacyFrame;
   if (type === 'molecule') return MoleculeChart;
-  if (type === 'function2d' || type === 'conic') return FunctionChart;
+  if (isCartesian.value) return CartesianPlot;
   if (type === 'physics' || type === 'diagram') return ShapeSvg;
   return ThreeScene;
 });
@@ -75,14 +89,14 @@ async function toggleFullscreen() {
     <component
       :is="component"
       ref="child"
-      :visualization="visualization"
+      :visualization="isCartesian ? visualization : renderVisualization"
       :show-aux="showAux"
       :show-labels="showLabels"
       :auto-rotate="autoRotate"
     />
 
     <ul v-if="hasAux && showAux" class="viz-aux-list">
-      <li v-for="(item, index) in (visualization.spec.auxiliary as Record<string, unknown>[])" :key="index">
+      <li v-for="(item, index) in ((sceneSpec.auxiliary as Record<string, unknown>[]) ?? [])" :key="index">
         <strong>{{ item.kind }}</strong>
         <span v-if="item.reason"> — {{ item.reason }}</span>
       </li>

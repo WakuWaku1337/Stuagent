@@ -71,7 +71,7 @@ media.get('/:id', async (c) => {
     const buffer = await readMediaFile(row);
     const etag = `"${row.hash.slice(0, 20)}"`;
     if (c.req.header('if-none-match') === etag) return c.body(null, 304);
-    return c.body(buffer, 200, {
+    return c.body(new Uint8Array(buffer), 200, {
       'Content-Type': row.mime,
       'Content-Length': String(buffer.length),
       'Cache-Control': 'private, max-age=31536000, immutable',

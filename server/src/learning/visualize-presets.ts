@@ -1,4 +1,7 @@
 import type { VisualizationType } from './visualize.ts';
+import { vizKindForType } from './viz/document.ts';
+import { validateVizDocument } from '../../../shared/viz/schema.ts';
+import type { VizDocumentV2 } from '../../../shared/viz/types.ts';
 
 export interface VizPreset {
   id: string;
@@ -6,7 +9,7 @@ export interface VizPreset {
   subject: string;
   type: VisualizationType;
   keywords: string[];
-  spec: Record<string, unknown>;
+  scene: Record<string, unknown>;
 }
 
 const CUBE_POINTS = [
@@ -26,6 +29,10 @@ const CUBE_EDGES: [string, string][] = [
   ['A', 'E'], ['B', 'F'], ['C', 'G'], ['D', 'H'],
 ];
 
+/**
+ * 预置模板直接保存 v2 语义场景，不再经过 v1 legacy 转换，
+ * 因此打开预置时不会出现“旧版图形已降级显示”。
+ */
 export const VIZ_PRESETS: VizPreset[] = [
   {
     id: 'cube-section',
@@ -33,7 +40,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '数学',
     type: 'geometry3d',
     keywords: ['正方体', '立方体', '截面', '长方体'],
-    spec: {
+    scene: {
       points: CUBE_POINTS,
       edges: CUBE_EDGES,
       faces: [['A', 'B', 'C', 'D'], ['E', 'F', 'G', 'H'], ['A', 'B', 'F', 'E'], ['B', 'C', 'G', 'F'], ['C', 'D', 'H', 'G'], ['D', 'A', 'E', 'H']],
@@ -50,7 +57,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '数学',
     type: 'geometry3d',
     keywords: ['棱锥', '四棱锥', '三棱锥', '棱柱'],
-    spec: {
+    scene: {
       points: [
         { id: 'A', coord: [0, 0, 0] },
         { id: 'B', coord: [1, 0, 0] },
@@ -73,7 +80,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '数学',
     type: 'geometry3d',
     keywords: ['勾股', '直角三角形', '毕达哥拉斯'],
-    spec: {
+    scene: {
       points: [
         { id: 'C', coord: [0, 0, 0] },
         { id: 'A', coord: [3, 0, 0] },
@@ -97,15 +104,25 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '数学',
     type: 'function2d',
     keywords: ['二次函数', '抛物线', '交点', '数形结合', '不等式'],
-    spec: {
-      functions: [
-        { expression: 'x^2', color: '#409eff', label: 'y=x²' },
-        { expression: 'x+2', color: '#f56c6c', label: 'y=x+2' },
+    scene: {
+      definitions: [
+        { name: 'f', params: ['x'], body: 'x^2', display: 'y=x²' },
+        { name: 'g', params: ['x'], body: 'x+2', display: 'y=x+2' },
       ],
-      range: [-3, 4],
-      relations: [{ kind: 'intersection', solve: 'x^2=x+2' }],
-      regions: [{ where: 'x^2 < x+2', fill: 'rgba(64,158,255,0.2)' }],
-      sliders: [],
+      curves: [
+        { def: 'f', role: 'primary', visible: true },
+        { def: 'g', role: 'secondary', visible: true },
+      ],
+      parameters: [],
+      view: { x: [-3, 4], mode: 'auto' },
+      features: [
+        { kind: 'roots', of: ['f'], limit: 20 },
+        { kind: 'extrema', of: ['f'], limit: 6 },
+        { kind: 'intersections', of: ['f', 'g'], limit: 20 },
+      ],
+      regions: [
+        { kind: 'between', lower: { kind: 'function', def: 'f' }, upper: { kind: 'function', def: 'g' }, role: 'solution' },
+      ],
     },
   },
   {
@@ -114,12 +131,13 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '数学',
     type: 'function2d',
     keywords: ['正弦', '三角函数', 'sin', '余弦', '周期'],
-    spec: {
-      functions: [{ expression: 'sin(x)', color: '#409eff', label: 'y=sin x' }],
-      range: [-6.283, 6.283],
-      relations: [],
+    scene: {
+      definitions: [{ name: 'f', params: ['x'], body: 'a*sin(x)', display: 'y=a·sin x' }],
+      curves: [{ def: 'f', role: 'primary', visible: true }],
+      parameters: [{ name: 'a', min: 0.5, max: 3, step: 0.1, value: 1 }],
+      view: { x: [-6.283, 6.283], mode: 'auto' },
+      features: [{ kind: 'roots', of: ['f'], limit: 20 }],
       regions: [],
-      sliders: [{ param: 'a', min: 0.5, max: 3, step: 0.1, value: 1 }],
     },
   },
   {
@@ -128,10 +146,10 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '数学',
     type: 'conic',
     keywords: ['椭圆', '双曲线', '圆锥曲线', '离心率'],
-    spec: {
+    scene: {
       expression: 'x^2/9 + y^2/4 - 1',
-      implicit: true,
-      range: [-4, 4],
+      label: 'x²/9 + y²/4 = 1',
+      view: { x: [-4, 4], y: [-4, 4], mode: 'fixed' },
     },
   },
   {
@@ -140,7 +158,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '化学',
     type: 'molecule',
     keywords: ['水分子', 'H2O', '水', '键角', '分子构型'],
-    spec: {
+    scene: {
       format: 'xyz',
       style: 'stick',
       data: '3\nwater\nO 0.000 0.000 0.000\nH 0.757 0.586 0.000\nH -0.757 0.586 0.000\n',
@@ -152,7 +170,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '化学',
     type: 'molecule',
     keywords: ['甲烷', 'CH4', '正四面体', '共价键'],
-    spec: {
+    scene: {
       format: 'xyz',
       style: 'stick',
       data: '5\nmethane\nC 0.000 0.000 0.000\nH 0.629 0.629 0.629\nH -0.629 -0.629 0.629\nH -0.629 0.629 -0.629\nH 0.629 -0.629 -0.629\n',
@@ -164,7 +182,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '物理',
     type: 'physics',
     keywords: ['受力', '摩擦力', '斜面', '牛顿', '受力分析'],
-    spec: {
+    scene: {
       elements: [
         { kind: 'line', from: [40, 320], to: [620, 320], label: '地面' },
         { kind: 'line', from: [80, 320], to: [560, 120] },
@@ -182,7 +200,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '物理',
     type: 'physics',
     keywords: ['电路', '欧姆', '电阻', '电流', '电压'],
-    spec: {
+    scene: {
       elements: [
         { kind: 'line', from: [120, 100], to: [520, 100] },
         { kind: 'line', from: [520, 100], to: [520, 300] },
@@ -201,7 +219,7 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '生物',
     type: 'biology',
     keywords: ['细胞', '细胞器', '细胞核', '线粒体'],
-    spec: {
+    scene: {
       parts: [
         { id: 'membrane', label: '细胞膜', coord: [0, 0, 0], radius: 1.6, color: '#8ec5ff' },
         { id: 'nucleus', label: '细胞核', coord: [0.2, 0.1, 0], radius: 0.6, color: '#b07ce8' },
@@ -216,12 +234,24 @@ export const VIZ_PRESETS: VizPreset[] = [
     subject: '地理',
     type: 'terrain',
     keywords: ['地形', '等高线', '山地', '海拔'],
-    spec: {
+    scene: {
       expression: 'sin(x/2)*cos(y/2)*2 + 2',
       range: [-6, 6],
     },
   },
 ];
+
+export function presetDocument(preset: VizPreset, inputText?: string): VizDocumentV2 {
+  return validateVizDocument({
+    schema: 'edupi.viz/v2',
+    kind: vizKindForType(preset.type),
+    title: preset.title,
+    input: { text: inputText?.trim() || preset.title, subject: preset.subject },
+    provenance: { generator: 'preset', version: 'preset@2.0.0' },
+    scene: preset.scene,
+    diagnostics: [],
+  });
+}
 
 export function matchPreset(question: string, subject?: string): VizPreset | undefined {
   const text = `${question} ${subject ?? ''}`.toLowerCase();

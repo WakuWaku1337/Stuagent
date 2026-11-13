@@ -353,7 +353,9 @@ db.exec(`
     title TEXT NOT NULL,
     spec TEXT NOT NULL,
     source TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    input_text TEXT
   );
 
   CREATE TABLE IF NOT EXISTS ocr_jobs (
@@ -471,6 +473,13 @@ function hasColumn(table: string, column: string): boolean {
 
 if (!hasColumn('usage_records', 'trace_id')) {
   db.exec('ALTER TABLE usage_records ADD COLUMN trace_id TEXT');
+}
+
+if (!hasColumn('visualizations', 'schema_version')) {
+  db.exec('ALTER TABLE visualizations ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1');
+}
+if (!hasColumn('visualizations', 'input_text')) {
+  db.exec('ALTER TABLE visualizations ADD COLUMN input_text TEXT');
 }
 
 // C01：SSE 断线重发幂等，按账号 + 客户端请求号去重。

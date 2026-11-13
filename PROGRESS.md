@@ -1,11 +1,23 @@
 # 智学 实施进度
 
-当前阶段：多用户上线加固（2026-11-13，PR #2）已完成并部署到 `8.148.185.212`；文档—代码一致性整改、公式渲染与函数可视化修复均已完成；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
+当前阶段：多用户上线加固（2026-11-13，PR #2）已完成并部署到 `8.148.185.212`；文档—代码一致性整改、公式渲染与函数可视化修复、统一可视化生成方案重构（VizPlan v2 全类型 strict schema + 像素基线 CI）均已完成；快模型分级路由仍未接入主对话，复盘多图/导出、可视化动画、MCP 重连/日志等仍为未实现
 
 公开注册：开发默认开放（`REGISTRATION_OPEN=1`）；生产 `8.148.185.212` 已设 `REGISTRATION_OPEN=0`，由管理员建号
 
 密码策略：注册、改密、管理员重置统一放宽为 6–128 位；README 已按 v0.30 重写（2026-11-08）
 
+## 2026-11-13 · 统一可视化生成方案重构（VizPlan v2）
+
+- 施工文档：`施工文档-统一可视化生成方案重构.md`。
+- 生成入口：`visualize_generate` 只接受 `question/subject/hint`，删除模型手写 `type+spec` 回退；传 `spec` 返回 `VIZ_AGENT_SPEC_FORBIDDEN`。
+- v2 文档：所有 9 种类型写 `schema='edupi.viz/v2'` 且都使用严格语义 scene；function-graph 禁止 `fill/stroke/attr/color/style/opacity/lineWidth`，其他类型只允许受控领域样式字段，未知字段一律拒绝；`visualizations` 增加 `schema_version`、`input_text`。
+- 渲染：新增 `web/src/components/viz/CartesianPlot.vue` 与 `shared/viz/cartesian.ts`；曲线/根/交点/极值/区域/自适应圆锥曲线均由共享编译器生成，`function-plot` 依赖已移除。
+- 旧记录：`web/src/utils/vizPlan.ts` 将 v1 function2d/conic 降级为 v2；新增 `migrate:viz`（默认 dry-run，`--apply` 写库，支持 `--limit`/`--batch-size`/`--strict-input`）。本地开发库 12/12 条已迁移，生产库待按备份流程执行。
+- 校验：`shared/viz/schema.ts` 拒绝样式字段与常量区域；解析失败返回 422 + diagnostics；题目零点数量不符返回 warning；多函数歧义返回 `VIZ_AMBIGUOUS_TARGET`。
+- 预置/兼容：12 条预置模板直接保存 v2 scene，不再经过 legacy 转换；`FunctionChart.vue` 已删除；原生 `|...|`、分段函数顶层复合、任意参数名求值已支持；modeler 已拆为 core/function/conic/geometry/molecule/physics/biology 七个模块。
+- 验证：`npm run check:viz` ALL PASS（含 5 个 golden fixture、8 个 SVG 像素快照、全预置原生 v2、x/y 条件区域、圆锥曲线自适应分辨率）；`check-visualize.ts` ALL PASS；`npm run build --workspace web` 通过；`tsc -p server/tsconfig.json --noEmit` 0 error；手工浏览器验证 v2 函数、旧坏区域、v2 正方体、椭圆、区域与滑块。
+- CI：新增 `.github/workflows/viz-ci.yml`，运行服务端类型检查、Web 构建与 `check:viz` 全套回归。
+- 收尾：区域 `condition` 支持 `axis='x'|'y'`（竖条/水平带）；圆锥曲线 marching squares 已验证分辨率自适应；非函数类型 strict schema 覆盖 geometry3d/function3d/molecule/terrain/biology/physics/diagram。
 ## 2026-11-13 · 多用户上线加固（PR #2）
 
 - 目标：单台服务器、单实例 Node + SQLite 支撑多用户；不引入多实例/Postgres/Redis。
@@ -125,7 +137,7 @@
 阶段 J · S17 补齐：§6.14 统一可视化引擎（交互课件 + 自动可视化合并）已完成（2026-11-08）
 - 前端只保留一个入口 `/visualize`（统一可视化）；`/courseware` 重定向并保留 `?open=` 参数兼容旧链接，侧栏「交互课件」「自动可视化」两条合并为一条
 - 统一渲染器：Three.js（geometry3d/function3d/terrain/biology）、function-plot（function2d/conic，含隐式曲线）、3Dmol（molecule）、内联 SVG（physics/diagram）；旧版单文件 HTML 课件只读，走沙箱 iframe
-- 预置课件库 13 条 spec（`server/src/learning/visualize-presets.ts`）+ 关键词/学科匹配器；纯主题问题命中即复用固定 id `preset:<id>`，不重复建记录、不消耗模型调用
+- 预置课件库 12 条 v2 scene（`server/src/learning/visualize-presets.ts`）+ 关键词/学科匹配器；纯主题问题命中即复用固定 id `preset:<id>`，不重复建记录、不消耗模型调用
 - 具体题目由 `visualize-modeler.ts` 按内容确定性建模；解析不到结构时不出图，不再调用模型判定或生成 spec
 - spec 校验扩展：geometry3d `auxiliary`（9 种 kind + style/reason，逐条显隐）、function2d `functions/relations/regions/sliders`、molecule `format+data`、biology `parts`、terrain `grid|expression`、physics/diagram `elements` 词汇表
 - 对话内自动判定：拍照或题目命中关键词时自动生成可视化，SSE 新增 `visualization` 事件，回答内嵌渲染器；可视化 id 落库到 `messages.visualization_id`，重开会话仍可见
@@ -230,9 +242,9 @@
 下一步：阶段 I · S23 性能优化与压测（里程碑 6：TTFT/P95 达标、语义缓存生效）；解题视频按 §3.2 外接 MCP 后置，不在本期自研
 
 关键文件/接口：
-- server/src/learning/visualize-presets.ts：13 条预置可视化 spec 与关键词/学科匹配器
+- server/src/learning/visualize-presets.ts：12 条预置可视化 scene 与关键词/学科匹配器
 - server/src/learning/visualize-engine.ts：统一生成入口（题目确定性建模 → 纯主题回退预置 → 不出图）与自动判定关键词
-- server/src/learning/visualize-modeler.ts：函数/圆锥曲线/立体几何/分子/物理/生物题目的规则解析与 spec 生成
+- server/src/learning/visualize-modeler.ts + server/src/learning/viz/modeler/*.ts：编排器与 core/function/conic/geometry/molecule/physics/biology 七个规则解析模块
 - server/src/learning/visualize.ts：spec 校验（auxiliary/functions/relations/regions/sliders/molecule/biology/terrain/elements）、统一列表/读取/删除（含 legacy 课件）、固定 id `preset:<id>` 去重
 - server/src/courseware/legacy.ts：旧版单文件 HTML 课件只读访问（列表/取 HTML/删除）
 - server/src/routes/visualize.ts：`/api/visualize` 与 `/api/visualize/generate`

@@ -1,0 +1,44 @@
+name: viz-ci
+
+on:
+  push:
+    paths:
+      - 'shared/viz/**'
+      - 'shared/expression.ts'
+      - 'server/src/learning/**'
+      - 'server/scripts/check-viz-*'
+      - 'server/testdata/viz/**'
+      - 'web/src/components/viz/**'
+      - 'web/src/utils/vizPlan.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/viz-ci.yml'
+  pull_request:
+    paths:
+      - 'shared/viz/**'
+      - 'shared/expression.ts'
+      - 'server/src/learning/**'
+      - 'server/scripts/check-viz-*'
+      - 'server/testdata/viz/**'
+      - 'web/src/components/viz/**'
+      - 'web/src/utils/vizPlan.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/viz-ci.yml'
+
+jobs:
+  viz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Type check server
+        run: npx tsc -p server/tsconfig.json --noEmit
+      - name: Build web
+        run: npm run build --workspace web
+      - name: Viz contract, render and pixel snapshots
+        run: npm run check:viz

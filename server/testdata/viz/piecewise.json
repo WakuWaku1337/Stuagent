@@ -1,0 +1,5 @@
+{
+  "name": "piecewise",
+  "question": "画出分段函数 f(x)=\\begin{cases}6, & x<=-3\\\\-2x, & -3<x<3\\\\-6, & x>=3\\end{cases} 的图像",
+  "expected": { "curves": 1, "roots": 1, "regions": 0, "conicSegments": 0 }
+}

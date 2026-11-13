@@ -40,7 +40,8 @@ type Token =
   | { type: 'operator'; value: string; pos: number }
   | { type: 'left'; pos: number }
   | { type: 'right'; pos: number }
-  | { type: 'comma'; pos: number };
+  | { type: 'comma'; pos: number }
+  | { type: 'bar'; pos: number };
 
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
@@ -94,6 +95,11 @@ function tokenize(source: string): Token[] {
       index += 1;
       continue;
     }
+    if (char === '|') {
+      tokens.push({ type: 'bar', pos: index });
+      index += 1;
+      continue;
+    }
     throw new ExpressionError(`不支持的字符：${char}`);
   }
   return tokens;
@@ -101,6 +107,7 @@ function tokenize(source: string): Token[] {
 
 class Parser {
   private index = 0;
+  private barDepth = 0;
 
   constructor(private readonly tokens: Token[]) {}
 
@@ -136,7 +143,7 @@ class Parser {
 
   private startsPrimary(): boolean {
     const token = this.peek();
-    return token?.type === 'number' || token?.type === 'name' || token?.type === 'left';
+    return token?.type === 'number' || token?.type === 'name' || token?.type === 'left' || (token?.type === 'bar' && this.barDepth === 0);
   }
 
   private parseAnd(): ExprNode {
@@ -237,6 +244,14 @@ class Parser {
       const node = this.parseAnd();
       if (!this.match('right')) throw new ExpressionError('括号不匹配');
       return node;
+    }
+    if (token.type === 'bar') {
+      this.index += 1;
+      this.barDepth += 1;
+      const node = this.parseAnd();
+      if (!this.match('bar')) throw new ExpressionError('绝对值缺少结束 |');
+      this.barDepth -= 1;
+      return { kind: 'call', name: 'abs', args: [node] };
     }
     throw new ExpressionError(`无法解析的符号（位置 ${token.pos}）`);
   }

@@ -70,6 +70,7 @@ export function ensureCollection(learnerId = currentLearnerId()): Promise<void> 
           type: 'BM25',
           input_field_names: ['text'],
           output_field_names: ['sparse_vector'],
+          params: {},
         },
       ],
       index_params: [
@@ -168,7 +169,7 @@ export async function hybridRecall(
         },
         {
           anns_field: 'sparse_vector',
-          data: [query],
+          data: [query as any],
           limit,
           params: {},
           ...(expr ? { expr } : {}),

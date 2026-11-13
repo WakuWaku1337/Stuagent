@@ -1,0 +1,5 @@
+{
+  "name": "quadratic",
+  "question": "画出函数 y=x^2-4x+3 的图像",
+  "expected": { "curves": 1, "roots": 2, "extrema": 1, "regions": 0, "conicSegments": 0 }
+}

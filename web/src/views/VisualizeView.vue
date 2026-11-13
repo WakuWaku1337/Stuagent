@@ -321,7 +321,7 @@ onMounted(load);
               <el-input-number v-model="form.rangeMax" :step="1" />
             </el-form-item>
           </div>
-          <p class="viz-form-note">支持 + - * / ^、sin/cos/sqrt/abs/log/ln/exp 与变量 x；圆锥曲线/三维函数暂按 x 截线展示。</p>
+          <p class="viz-form-note">支持 + - * / ^、sin/cos/sqrt/abs/log/ln/exp 与变量 x；圆锥曲线请输入 F(x,y) 表达式（如 x^2/9+y^2/4-1），三维函数暂按 x 截线展示。</p>
         </template>
 
         <el-form-item v-else label="spec（JSON）">

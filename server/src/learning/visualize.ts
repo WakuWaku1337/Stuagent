@@ -3,6 +3,9 @@ import { db } from '../store.ts';
 import { deleteLegacyCourseware, getLegacyCourseware, listLegacyCourseware } from '../courseware/legacy.ts';
 import { currentLearnerId } from './context.ts';
 import { compileExpression } from '../../../shared/expression.ts';
+import { validateVizDocument } from '../../../shared/viz/schema.ts';
+import { VizPlanError, type VizDiagnostic, type VizDocumentV2 } from '../../../shared/viz/types.ts';
+import { vizKindForType } from './viz/document.ts';
 
 export const VISUALIZATION_TYPES = [
   'geometry3d',
@@ -27,6 +30,9 @@ export interface Visualization {
   spec: Record<string, unknown>;
   source: string | null;
   created_at: number;
+  schema_version?: number;
+  input_text?: string | null;
+  diagnostics?: VizDiagnostic[];
 }
 
 interface VisualizationRow {
@@ -37,20 +43,22 @@ interface VisualizationRow {
   spec: string;
   source: string | null;
   created_at: number;
+  schema_version?: number;
+  input_text?: string | null;
 }
-
 export class VisualizationError extends Error {
   code: string;
   status: number;
+  diagnostics?: VizDiagnostic[];
 
-  constructor(code: string, message: string, status = 400) {
+  constructor(code: string, message: string, status = 400, diagnostics?: VizDiagnostic[]) {
     super(message);
     this.name = 'VisualizationError';
     this.code = code;
     this.status = status;
+    this.diagnostics = diagnostics;
   }
 }
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -140,7 +148,7 @@ function validateFunctionSpec(spec: Record<string, unknown>, needRange = true) {
         validateCompilable(expression, 'VIZ_EXPRESSION_UNSUPPORTED', sliderValues);
       }
       optionalString(item, 'color', 'VIZ_COLOR_INVALID', 40);
-      optionalString(item, 'label', 'VIZ_LABEL_INVALID', 60);
+      optionalString(item, 'label', 'VIZ_LABEL_INVALID', 120);
     }
   } else {
     const expression = validateExpression(spec.expression);
@@ -369,16 +377,21 @@ export function validateVisualizationSpec(type: VisualizationType, raw: unknown)
 }
 
 function toVisualization(row: VisualizationRow): Visualization {
+  const spec = JSON.parse(row.spec) as Record<string, unknown>;
+  const schemaVersion = Number(row.schema_version ?? 1);
+  const diagnostics = schemaVersion >= 2 && Array.isArray(spec.diagnostics) ? (spec.diagnostics as VizDiagnostic[]) : [];
   return {
     visualization_id: row.visualization_id,
     type: row.type,
     title: row.title,
-    spec: JSON.parse(row.spec) as Record<string, unknown>,
+    spec,
     source: row.source,
     created_at: row.created_at,
+    schema_version: schemaVersion,
+    input_text: row.input_text ?? null,
+    diagnostics,
   };
 }
-
 export function listVisualizations(type?: VisualizationType): Visualization[] {
   const learnerId = currentLearnerId();
   if (type) {
@@ -408,32 +421,60 @@ export function getVisualization(id: string): Visualization | undefined {
   return row ? toVisualization(row) : undefined;
 }
 
+function validateDocumentForType(type: VisualizationType, raw: unknown): VizDocumentV2 {
+  try {
+    const doc = validateVizDocument(raw);
+    const expectedKind = vizKindForType(type);
+    if (doc.kind !== expectedKind) {
+      throw new VizPlanError('VIZ_TYPE_MISMATCH', `${type} 需要 ${expectedKind} 场景`);
+    }
+    return doc;
+  } catch (error) {
+    if (error instanceof VizPlanError) {
+      throw new VisualizationError(error.code, error.message, 400, error.diagnostics);
+    }
+    throw error;
+  }
+}
+
 export function createVisualization(input: {
   type: VisualizationType;
   title: string;
   spec: unknown;
   source?: string;
   visualizationId?: string;
+  schemaVersion?: 1 | 2;
+  inputText?: string;
 }): Visualization {
   const type = input.type;
   const title = input.title?.trim() ?? '';
   if (!title || title.length > 80) {
     throw new VisualizationError('VIZ_TITLE_INVALID', '标题不能为空且不超过 80 字');
   }
-  const spec = validateVisualizationSpec(type, input.spec);
-  if (input.visualizationId) {
-    const existing = getVisualization(input.visualizationId);
-    if (existing) return existing;
-  }
+  const schemaVersion = input.schemaVersion ?? 1;
+  const spec = schemaVersion === 2
+    ? validateDocumentForType(type, input.spec) as unknown as Record<string, unknown>
+    : validateVisualizationSpec(type, input.spec);
+  const existing = input.visualizationId ? getVisualization(input.visualizationId) : undefined;
+  const refreshPreset = input.source === 'preset';
+  if (existing && !refreshPreset && !(schemaVersion === 2 && (existing.schema_version ?? 1) < 2)) return existing;
   const id = input.visualizationId ?? randomUUID();
   const learnerId = input.source === 'preset' ? GLOBAL_LEARNER : currentLearnerId();
-  db.prepare(
-    `INSERT INTO visualizations (visualization_id, learner_id, type, title, spec, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, learnerId, type, title, JSON.stringify(spec), input.source ?? null, Date.now());
+  const documentInput = schemaVersion === 2 && isRecord(spec.input) ? spec.input : null;
+  const inputText = input.inputText ?? (typeof documentInput?.text === 'string' ? documentInput.text : null);
+  const storedInputText = existing && refreshPreset && existing.input_text ? existing.input_text : inputText;
+  if (existing) {
+    db.prepare(
+      `UPDATE visualizations SET type = ?, title = ?, spec = ?, source = ?, schema_version = ?, input_text = ? WHERE visualization_id = ?`,
+    ).run(type, title, JSON.stringify(spec), input.source ?? null, schemaVersion, storedInputText, id);
+  } else {
+    db.prepare(
+      `INSERT INTO visualizations (visualization_id, learner_id, type, title, spec, source, created_at, schema_version, input_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+    ).run(id, learnerId, type, title, JSON.stringify(spec), input.source ?? null, Date.now(), schemaVersion, inputText);
+  }
   return getVisualization(id)!;
 }
-
 export function deleteVisualization(id: string): boolean {
   return (
     db

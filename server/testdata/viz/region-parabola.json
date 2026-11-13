@@ -1,0 +1,5 @@
+{
+  "name": "region-parabola",
+  "question": "x^2-3x+2>0",
+  "expected": { "curves": 1, "roots": 2, "extrema": 1, "regions": 2, "conicSegments": 0 }
+}

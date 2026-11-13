@@ -1633,7 +1633,7 @@ flowchart TD
 
 * 统一入口：拍照 / 提问后自动判定，先做确定性建模；未命中具体结构时再匹配预置交互课件库（edulab）；两条路径输出统一可视化对象。
 
-* 统一渲染：3D 用 Three.js、函数用 function-plot、分子用 3Dmol，预置课件与动态生成共用渲染器，交互能力一致。
+* 统一渲染：所有新记录使用 VizPlan v2 严格语义 scene；3D 用 Three.js、函数 2D/圆锥曲线用项目内 SVG（CartesianPlot）、分子用 3Dmol、物理/示意图用内联 SVG，预置课件与动态生成共用渲染器。
 
 * 统一管理：课件与生成结果在同一面板展示，支持旋转缩放、标注、辅助线与截图；动画未实现。
 
@@ -1663,47 +1663,66 @@ flowchart TD
 | biology | 动物/植物细胞及题目提到的细胞器 | `动物细胞结构`、含叶绿体/液泡的植物细胞 |
 | diagram | 直角三角形、正方形、矩形、圆的边长/半径 | `直角三角形两直角边 3 和 4`、`圆半径 2`、`矩形长 5 宽 3` |
 
-解析失败时返回“未从题目中解析到可建模结构”，由调用方决定是否让用户补充题目或手动传 type+spec。
+解析失败时返回 422 / “未从题目中解析到可建模结构”，提示用户补充题目；智能体不再传 type+spec，手动新建走专用表单。
 
 #### 6.14.2 可视化规格（spec）
 
 
 
-```
+```json
 {
-  "type": "geometry3d",
+  "schema": "edupi.viz/v2",
+  "kind": "solid-geometry",
   "title": "正方体与截面",
-  "points": [
-    { "id": "A", "coord": [0, 0, 0] },
-    { "id": "B", "coord": [1, 0, 0] }
-  ],
-  "edges": [["A", "B"]],
-  "faces": [["A", "B", "C", "D"]],
-  "auxiliary": [{ "kind": "plane", "points": ["A", "C", "E"] }],
-  "labels": true
+  "input": { "text": "正方体 ABCD-A1B1C1D1，过 A、C、E 作截面，棱长 2" },
+  "provenance": { "generator": "modeler", "version": "modeler@2.0.0" },
+  "scene": {
+    "points": [
+      { "id": "A", "coord": [0, 0, 0] },
+      { "id": "B", "coord": [2, 0, 0] }
+    ],
+    "edges": [["A", "B"]],
+    "faces": [["A", "B", "C", "D"]],
+    "auxiliary": [{ "kind": "plane", "points": ["A", "C", "E"] }],
+    "labels": true
+  },
+  "diagnostics": []
 }
 ```
 
-函数类型使用 type=function2d，字段含 expression（表达式）、variable（变量）、range（区间）、features（交点 / 极值 / 面积）。
-分段函数使用 `functions[].piecewise`，每项包含 `when` 与 `then`：
+9 种类型都走严格 scene 校验：`function-graph`、`conic`、`solid-geometry`、`function-3d`、`molecule`、`terrain`、`biology`、`physics`、`diagram`。function-graph 禁止 `fill/stroke/attr/color/style/opacity/lineWidth`；其他类型只允许白名单内的领域样式字段（如辅助线 `style.color/opacity/dash`、物理箭头 `color`、生物结构 `color`），未知字段一律返回 `VIZ_SCENE_INVALID`。
+
+函数场景使用语义定义、曲线引用、参数、视图、特征与区域：
 
 ```json
 {
-  "functions": [
-    {
-      "label": "g(x)=分段函数",
+  "schema": "edupi.viz/v2",
+  "kind": "function-graph",
+  "title": "函数 f(x)=分段函数",
+  "input": { "text": "画出分段函数 f(x)=..." },
+  "provenance": { "generator": "modeler", "version": "modeler@2.0.0" },
+  "scene": {
+    "definitions": [{
+      "name": "f",
+      "params": ["x"],
+      "display": "f(x)=分段函数",
       "piecewise": [
         { "when": "x<=-3", "then": "6" },
         { "when": "(-3<x)&&(x<3)", "then": "-2*x" },
         { "when": "x>=3", "then": "-6" }
       ]
-    }
-  ],
-  "range": [-8, 8]
+    }],
+    "curves": [{ "def": "f", "role": "primary", "visible": true }],
+    "parameters": [],
+    "view": { "x": [-8, 8], "mode": "auto" },
+    "features": [{ "kind": "roots", "of": ["f"], "limit": 20 }],
+    "regions": []
+  },
+  "diagnostics": []
 }
 ```
 
-条件支持 `x<=a`、`a<x<b`、`x>=b`；未命中任何分支时返回 `NaN`，前端不绘制该点。表达式在落库前会先编译，不可编译返回 `VIZ_EXPRESSION_UNSUPPORTED`，分段分支非法返回 `VIZ_PIECEWISE_INVALID`。
+条件支持 `x<=a`、`a<x<b`、`x>=b`；未命中任何分支时返回 `NaN`，前端不绘制该点。表达式在落库前会先编译，不可编译返回 `VIZ_EXPRESSION_UNSUPPORTED`，分段分支非法返回 `VIZ_PIECEWISE_INVALID`。`schema_version=2`、`input_text` 落库；旧 v1 记录由 `web/src/utils/vizPlan.ts` 降级或 `migrate:viz` 批量迁移。`visualize_generate` 只接受 `question/subject/hint`，不接受智能体手写 spec；`function-plot` 已移除，`FunctionChart.vue` 已删除。
 
 #### 6.14.3 分学科渲染方案
 
@@ -1712,7 +1731,7 @@ flowchart TD
 | 类型    | 渲染技术                           | 能力                          |
 | ----- | ------------------------------ | --------------------------- |
 | 立体几何 | Three.js | 旋转 / 缩放、点线面标注、辅助线、截面；展开与动画未实现 |
-| 函数 2D | function-plot / SVG（GeoGebra 未实现） | 显式 / 隐式、坐标轴、交点、不等式区域、参数滑块、函数定义/复合、cases 分段；极值/渐近线/切点/对称轴未实现 |
+| 函数 2D | 项目内 SVG（CartesianPlot）+ 自适应 marching squares（GeoGebra 未实现） | 显式 / 隐式、坐标轴、根/交点/极值/端点、x/y 双向条件区域、参数滑块、函数定义/复合、cases 分段；渐近线/切点/对称轴未实现 |
 | 函数 3D | Three.js 曲面                    | 二元函数曲面、等高线                  |
 | 化学分子  | 3Dmol.js                       | 分子 / 蛋白结构、球棍 / 空间填充模型       |
 | 地理    | Three.js 地形 / 地图               | 地形、等高线、地球仪、洋流大气             |
@@ -1742,6 +1761,8 @@ flowchart TD
 
 * 标注 / 辅助线 / 截面开关与截图；动画播放与题目元素联动高亮【未实现，v0.31】。
 * 表达式不可编译时显示红色错误提示与具体原因，不再只留空白坐标轴。
+* v2 渲染器在曲线为空、区域过大、特征点数量不符时显示诊断；旧版 v1 记录显示“旧版图形已降级显示”提示。
+* 预置模板直接保存 v2，打开时不再触发 legacy 降级提示。
 
 #### 6.14.6 安全与兜底
 
@@ -1780,17 +1801,33 @@ flowchart TD
 
 
 
-```
+```json
 {
-  "type": "function2d",
-  "functions": [
-    { "expression": "x^2", "color": "#409eff", "label": "y=x²" },
-    { "expression": "x+2", "color": "#f56c6c", "label": "y=x+2" }
-  ],
-  "range": [-3, 4],
-  "relations": [{ "kind": "intersection", "solve": "x^2=x+2" }],
-  "regions": [{ "where": "x^2 < x+2", "fill": "rgba(64,158,255,0.2)" }],
-  "sliders": []
+  "schema": "edupi.viz/v2",
+  "kind": "function-graph",
+  "title": "二次函数与直线的交点",
+  "input": { "text": "y=x^2 与 y=x+2 的交点" },
+  "provenance": { "generator": "preset", "version": "preset@2.0.0" },
+  "scene": {
+    "definitions": [
+      { "name": "f", "params": ["x"], "body": "x^2", "display": "y=x²" },
+      { "name": "g", "params": ["x"], "body": "x+2", "display": "y=x+2" }
+    ],
+    "curves": [
+      { "def": "f", "role": "primary", "visible": true },
+      { "def": "g", "role": "secondary", "visible": true }
+    ],
+    "parameters": [],
+    "view": { "x": [-3, 4], "mode": "auto" },
+    "features": [
+      { "kind": "roots", "of": ["f"], "limit": 20 },
+      { "kind": "intersections", "of": ["f", "g"], "limit": 20 }
+    ],
+    "regions": [
+      { "kind": "between", "lower": { "kind": "function", "def": "f" }, "upper": { "kind": "function", "def": "g" }, "role": "solution" }
+    ]
+  },
+  "diagnostics": []
 }
 ```
 
@@ -1800,9 +1837,18 @@ flowchart TD
 
 * 自动标注：交点（解方程 f=g）、零点、不等式区域与参数滑块已实现；极值、渐近线、切点、对称轴【未实现，v0.31】。
 
-* 数形结合：方程看交点、不等式看区域填充、cases 分段函数分段绘制已实现（支持 `x≤a`、`a<x<b`、`x≥b`）；分段函数参与其他函数复合仍不支持。
+* 数形结合：方程看交点、不等式看区域填充、cases 分段函数分段绘制已实现（支持 `x≤a`、`a<x<b`、`x≥b`）；区域 `condition` 可按 `axis='x'` 生成竖条或按 `axis='y'` 生成水平带；分段函数支持顶层复合 `f(x)=g(x)`，`f(x)=g(x)+1` 这类外层复合仍不支持。
 
 * 动态：参数滑块驱动动直线 / 动曲线，观察根与交点变化；并与解析几何（直线与圆锥曲线）联动。
+
+#### 6.14.9 校验、迁移与视觉回归
+
+* 严格校验：`shared/viz/schema.ts` 对所有 kind 做未知字段拒绝、引用完整性、数量/长度/数值上限校验；function-graph 额外拒绝样式字段。
+* 解析器拆分：`visualize-modeler.ts` 只做编排，规则解析拆到 `viz/modeler/{core,function-model,conic-model,geometry-model,molecule-model,physics-model,biology-model}.ts`。
+* 批量迁移：`migrate:viz` 默认 dry-run，`--apply` 写库，支持 `--limit`、`--batch-size`、`--strict-input`；缺少 `input_text` 的记录用标题回填并写 `VIZ_INPUT_RECOVERED` 诊断。
+* 像素基线：`server/scripts/check-viz-snapshots.ts` 用 `shared/viz/svg.ts` 输出确定性 SVG，再栅格化为 PNG，对比 `server/testdata/viz/snapshots/*.png`；`--update` 更新基线。
+* CI：`.github/workflows/viz-ci.yml` 运行服务端类型检查、Web 构建与 `npm run check:viz`（契约 + 渲染 + 像素快照）。
+* 保留限制：像素基线覆盖函数/圆锥曲线 SVG，不替代 WebGL/3D 浏览器截图；圆锥曲线自适应细分 `maxDepth=4`；生产库迁移需在备份后手工执行。
 
 ### 6.15 响应速度优化方案
 
@@ -3009,7 +3055,7 @@ flowchart LR
 
 1. 合并交互课件与自动可视化，统一入口与 spec，前端同一渲染组件。
 
-2. 接入预置课件库（edulab）与题目自动生成（Three.js/function-plot/3Dmol，含辅助线、多函数）。
+2. 接入预置课件库（edulab）与题目自动生成（Three.js/CartesianPlot/3Dmol，含辅助线、多函数）。
 
 3. 接入安全 SDK：注入防护、PII 脱敏、工具调用校验。
 
