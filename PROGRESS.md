@@ -6,6 +6,14 @@
 
 密码策略：注册、改密、管理员重置统一放宽为 6–128 位；README 已按 v0.30 重写（2026-11-08）
 
+## 2026-11-15 · 回复截断与续写公式渲染修复
+
+- 输出上限：新装默认 `max_tokens` 从 4096 提升到 8192（含思考 token）；设置页增加提示，长题建议 8192–16384。现有实例仍以数据库设置为准。
+- 截断检测：`looksIncomplete` 增加未闭合 `$...$` / `$$...$$` 与 `\begin{cases}` 检测；达到 `finish_reason=length` 时提示当前 token 上限。
+- 续写：保留 Markdown/LaTeX 格式；公式断点不再插入换行；`done` 事件用完整文本回填，避免丢失增量分片。
+- 渲染：`MarkdownView` 在 Markdown HTML 生成阶段直接调用 KaTeX `renderToString`，先消毒再注入公式，移除流式结束后的 auto-render 竞态，修复 `$...$` 原样残留。
+- 验证：`check-markdown-math.ts` / `check-continuation.ts` ALL PASS；用生产对话原文验证 68 个公式全部渲染为 KaTeX、0 个残留 `$`；服务端 `tsc` 0 error；Web 构建通过。
+
 ## 2026-11-13 · 统一可视化生成方案重构（VizPlan v2）
 
 - 施工文档：`施工文档-统一可视化生成方案重构.md`。

@@ -340,6 +340,7 @@ export const useChatStore = defineStore('chat', () => {
           }
           if (event.type === 'thinking') reply.thinking = !reply.content;
           if (event.type === 'done') {
+            if (typeof event.text === 'string' && event.text) reply.content = event.text;
             reply.thinking = false;
             streaming.value = false;
           }
@@ -391,6 +392,7 @@ export const useChatStore = defineStore('chat', () => {
           }
           if (event.type === 'thinking') reply.thinking = !reply.content;
           if (event.type === 'done') {
+            if (typeof event.text === 'string' && event.text) reply.content = event.text;
             reply.thinking = false;
             streaming.value = false;
           }

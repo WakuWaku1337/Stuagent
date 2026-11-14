@@ -4,7 +4,7 @@
  *   node --import jiti/register scripts/check-markdown-math.ts
  */
 import { marked } from 'marked';
-import { protectMath, restoreMath, normalizeMath } from '../../web/src/utils/math.ts';
+import { protectMath, restoreMath, renderMathHtml, normalizeMath } from '../../web/src/utils/math.ts';
 
 let failures = 0;
 function report(ok: boolean, name: string, detail = ''): void {
@@ -17,6 +17,8 @@ const prepared = protectMath(piecewise);
 const html = restoreMath(marked.parse(prepared.text, { async: false }) as string, prepared.blocks, prepared.tokenPrefix);
 report(prepared.blocks.length === 1, 'protect one display math block');
 report(html.includes('\\\\'), 'restored html keeps double-backslash line breaks');
+const rendered = renderMathHtml(marked.parse(prepared.text, { async: false }) as string, prepared.blocks, prepared.tokenPrefix);
+report(rendered.includes('class="katex"') && !rendered.includes('$'), 'renders display math directly to KaTeX HTML');
 report(!html.includes('[2pt]'), 'spacing markers are removed');
 report(html.includes('\\leq') && html.includes('\\geq'), 'le/ge normalized to leq/geq');
 

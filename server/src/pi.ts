@@ -532,10 +532,16 @@ export async function chat(
           }
           if (limitHit) {
             onEvent({ type: 'incomplete', message: limitMessage(limitHit), attempt: attempts });
-          } else if (stopReason === 'length' || (fullText.length > 400 && looksIncomplete(fullText))) {
+          } else if (stopReason === 'length') {
             onEvent({
               type: 'incomplete',
-              message: '输出可能被截断，可点击“继续生成”或“重新生成”',
+              message: `已达到模型最大输出（当前设置 ${getScenarioParams('chat').maxTokens} tokens，含思考 token），可点击“继续生成”或“重新生成”`,
+              attempt: attempts,
+            });
+          } else if (fullText.length > 400 && looksIncomplete(fullText)) {
+            onEvent({
+              type: 'incomplete',
+              message: '输出结构可能不完整，可点击“继续生成”或“重新生成”',
               attempt: attempts,
             });
           }

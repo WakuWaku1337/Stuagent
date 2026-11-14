@@ -115,7 +115,7 @@ export function getSettings(): ModelSettings {
   db.prepare(
     `INSERT INTO model_settings
       (id, provider, model, base_url, reasoning, temperature, top_p, max_tokens, context_length, scenario_params, monthly_budget, updated_at)
-     VALUES (1, ?, ?, ?, 'medium', 0.5, 0.95, 4096, ?, '{}', 0, ?)`,
+     VALUES (1, ?, ?, ?, 'medium', 0.5, 0.95, 8192, ?, '{}', 0, ?)`,
   ).run(provider.id, firstModel.id, provider.baseUrl, firstModel.contextWindow, now);
   return getSettings();
 }

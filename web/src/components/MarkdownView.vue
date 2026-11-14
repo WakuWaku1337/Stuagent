@@ -1,41 +1,20 @@
+<!-- Markdown 渲染组件：处理数学公式、代码、链接和流式内容的安全展示。 -->
+
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import renderMathInElement from 'katex/contrib/auto-render';
-import { protectMath, restoreMath } from '../utils/math';
+import { protectMath, renderMathHtml } from '../utils/math';
 
 const props = defineProps<{ text: string }>();
 const el = ref<HTMLElement>();
 
-const prepared = computed(() => protectMath(props.text));
 const html = computed(() => {
-  const parsed = marked.parse(prepared.value.text, { async: false }) as string;
-  return DOMPurify.sanitize(restoreMath(parsed, prepared.value.blocks, prepared.value.tokenPrefix));
+  const prepared = protectMath(props.text);
+  const parsed = marked.parse(prepared.text, { async: false }) as string;
+  // 先消毒 Markdown，再注入 KaTeX 输出，避免 DOMPurify 改写公式节点。
+  return renderMathHtml(DOMPurify.sanitize(parsed), prepared.blocks, prepared.tokenPrefix);
 });
-
-watch(
-  () => props.text,
-  () =>
-    nextTick(() => {
-      if (!el.value) return;
-      renderMathInElement(el.value, {
-        delimiters: [
-          { left: '$$', right: '$$', display: true },
-          { left: '$', right: '$', display: false },
-        ],
-        throwOnError: false,
-      });
-      const errors = el.value.querySelectorAll('.katex-error');
-      if (errors.length > 0) {
-        console.warn(
-          '[math] KaTeX errors:',
-          [...errors].map((node) => node.getAttribute('title') ?? node.textContent ?? ''),
-        );
-      }
-    }),
-  { immediate: true },
-);
 </script>
 
 <template>

@@ -59,7 +59,7 @@ const reasoning = ref<ReasoningLevel>('medium');
 const generation = ref({
   temperature: 0.5,
   topP: 0.95,
-  maxTokens: 4096,
+  maxTokens: 8192,
   contextLength: 131072,
   monthlyBudget: 0,
 });
@@ -489,6 +489,7 @@ onMounted(load);
               <div class="gen-field">
                 <label class="field-label">Max tokens</label>
                 <el-input-number v-model="generation.maxTokens" :min="1" :max="200000" :step="256" controls-position="right" />
+                <span class="field-hint">输出上限（含思考 token）。长题建议 8192–16384，过低会中途截断。</span>
               </div>
               <div class="gen-field">
                 <label class="field-label">上下文长度</label>

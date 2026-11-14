@@ -22,6 +22,10 @@ report(looksIncomplete('计算结果如下：') === true, 'detect dangling colon
 report(looksIncomplete('（1 + 2') === true, 'detect unclosed parenthesis');
 report(looksIncomplete('已闭合（1 + 2）') === false, 'accept closed parenthesis');
 report(looksIncomplete('') === false, 'empty is not truncated');
+report(looksIncomplete('公式 $x+1') === true, 'detect unclosed inline math');
+report(looksIncomplete('公式 $x+1$') === false, 'accept closed inline math');
+report(looksIncomplete('$$x+1') === true, 'detect unclosed display math');
+report(looksIncomplete('\\begin{cases} x, & x>0') === true, 'detect unclosed cases block');
 
 const shared = '这是已经生成的回答内容，需要在断点处继续。';
 report(
@@ -33,6 +37,7 @@ report(
   'separate non-overlapping continuation',
 );
 report(mergeContinuation('已有内容', '') === '已有内容', 'empty continuation keeps text');
+report(mergeContinuation('公式 $x+', '1$ 结束') === '公式 $x+1$ 结束', 'merge math boundary without newline');
 
 const prompt = continuationPrompt('末尾内容', 2);
 report(

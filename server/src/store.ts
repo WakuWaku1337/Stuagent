@@ -200,7 +200,7 @@ db.exec(`
     reasoning TEXT NOT NULL DEFAULT 'medium',
     temperature REAL NOT NULL DEFAULT 0.5,
     top_p REAL NOT NULL DEFAULT 0.95,
-    max_tokens INTEGER NOT NULL DEFAULT 4096,
+    max_tokens INTEGER NOT NULL DEFAULT 8192,
     context_length INTEGER NOT NULL DEFAULT 131072,
     scenario_params TEXT NOT NULL DEFAULT '{}',
     monthly_budget REAL NOT NULL DEFAULT 0,
